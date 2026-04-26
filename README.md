@@ -1,19 +1,64 @@
 # hft-compressor
 
-Sibling compression application/library for `apps/hft-recorder`.
+Standalone compression core for canonical `apps/hft-recorder` market-data
+corpora. It is built separately and consumed as a prebuilt shared library.
 
-MVP scope:
-- input: one `trades.jsonl`, `bookticker.jsonl`, or `depth.jsonl` file
-- codec: `zstd_jsonl_blocks_v1`
-- output: `compressedData/zstd/sessions/<session>/<channel>.hfc`
-- report: `compressedData/zstd/sessions/<session>/<channel>.metrics.json`
+## Current scope
+
+Input is one canonical JSONL channel file:
+
+- `trades.jsonl`
+- `bookticker.jsonl`
+- `depth.jsonl`
+
+The core is organized around compression pipelines, not a single codec enum.
+A pipeline describes:
+
+- stream scope: all streams or a specific family
+- representation: JSONL blocks, delta rows, columnar rows, orderbook keyframes
+- transform: raw JSONL, delta, delta+varint, columnar delta
+- entropy stage: zstd, lz4, brotli, xz, arithmetic coding, range coding, rANS
+- profile: live, archive, replay, or research
+
+Only `std.zstd_jsonl_blocks_v1` is implemented today. The other descriptors are
+intentional placeholders for the coursework benchmark matrix and return
+`not_implemented` until their implementation is added.
+
+Implemented output:
+
+```text
+compressedData/zstd/sessions/<session>/<channel>.hfc
+compressedData/zstd/sessions/<session>/<channel>.metrics.json
+```
 
 The compressed file may be loaded into memory by consumers. Decoding is block
 streaming: one compressed block is decompressed into scratch memory, emitted to
 the caller, and then discarded.
 
+## Public API
 
-## Prebuilt library usage
+Use `listPipelines()` to discover available and planned pipelines, then call
+`compress()` with an explicit `pipelineId`.
+
+```cpp
+hft_compressor::CompressionRequest request{};
+request.inputPath = "trades.jsonl";
+request.outputRoot = "compressedData";
+request.pipelineId = "std.zstd_jsonl_blocks_v1";
+const auto result = hft_compressor::compress(request);
+```
+
+`decodeHfcBuffer()` decodes the current `.hfc` JSONL-block container through a
+block callback. It does not materialize the full decoded corpus.
+
+CLI examples:
+
+```bash
+hft-compressor --list-pipelines
+hft-compressor trades.jsonl --pipeline std.zstd_jsonl_blocks_v1 compressedData
+```
+
+## Build
 
 `hft-compressor` is a standalone module. Build it separately and pass the
 resulting library to `hft-recorder`; do not add this directory as a recorder
@@ -26,23 +71,27 @@ cmake -S apps/hft-compressor -B apps/hft-compressor/build
 cmake --build apps/hft-compressor/build --config Release --target hft_compressor_core
 ```
 
-This produces:
-
-- `apps/hft-compressor/build/Release/hft_compressor_core.dll`
-- `apps/hft-compressor/build/Release/hft_compressor_core.lib`
-
 Linux/WSL:
 
 ```bash
-cmake -S apps/hft-compressor -B apps/hft-compressor/build
-cmake --build apps/hft-compressor/build --target hft_compressor_core
+./compile.sh
 ```
 
-This produces `apps/hft-compressor/build/libhft_compressor_core.so` or the
-platform generator's equivalent shared object path.
+The stable Linux artifact is:
+
+```text
+apps/hft-compressor/build/libhft_compressor_core.so
+```
 
 `hft-recorder` consumes the module through:
 
 - `HFT_COMPRESSOR_PUBLIC_INCLUDE_DIR`
 - `HFT_COMPRESSOR_SHARED_LIB`
 - `HFT_COMPRESSOR_RUNTIME_LIB` on Windows when the runtime DLL is separate from the import lib
+
+## Coursework direction
+
+The registry already names standard baselines, Python research baselines,
+domain transforms, hybrid pipelines, and custom entropy coders. This keeps the
+next work focused on implementing and benchmarking pipeline bodies rather than
+reshaping the public API each time a new idea is tested.

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "format.hpp"
@@ -18,12 +19,23 @@
 namespace hft_compressor {
 namespace {
 
-CompressionResult fail(Status status, const CompressionRequest& request, std::string error) {
+void applyPipeline(CompressionResult& result, const PipelineDescriptor* pipeline) {
+    if (pipeline == nullptr) return;
+    result.pipelineId = std::string{pipeline->id};
+    result.representation = std::string{pipeline->representation};
+    result.transform = std::string{pipeline->transform};
+    result.entropy = std::string{pipeline->entropy};
+    result.profile = std::string{pipeline->profile};
+    result.implementationKind = std::string{pipeline->implementationKind};
+}
+
+CompressionResult fail(Status status, const CompressionRequest& request, const PipelineDescriptor* pipeline, std::string error) {
     CompressionResult result{};
     result.status = status;
     result.error = std::move(error);
     result.inputPath = request.inputPath;
     result.streamType = inferStreamTypeFromPath(request.inputPath);
+    applyPipeline(result, pipeline);
     return result;
 }
 
@@ -59,9 +71,9 @@ bool writeTextFile(const std::filesystem::path& path, const std::string& text) {
     return static_cast<bool>(out);
 }
 
-std::filesystem::path outputPathFor(const CompressionRequest& request, StreamType streamType) {
+std::filesystem::path outputPathFor(const CompressionRequest& request, const PipelineDescriptor& pipeline, StreamType streamType) {
     const auto root = request.outputRoot.empty() ? defaultOutputRoot() : request.outputRoot;
-    return root / sessionIdForInput(request.inputPath)
+    return root / std::string{pipeline.outputSlug} / "sessions" / sessionIdForInput(request.inputPath)
         / (std::string{streamTypeChannelName(streamType)} + ".hfc");
 }
 
@@ -69,9 +81,9 @@ std::filesystem::path outputPathFor(const CompressionRequest& request, StreamTyp
 
 std::filesystem::path defaultOutputRoot() {
     const auto cwd = std::filesystem::current_path();
-    if (cwd.filename() == "hft-recorder") return cwd.parent_path() / "hft-compressor" / "compressedData" / "zstd" / "sessions";
-    if (cwd.filename() == "hft-compressor") return cwd / "compressedData" / "zstd" / "sessions";
-    return cwd / "compressedData" / "zstd" / "sessions";
+    if (cwd.filename() == "hft-recorder") return cwd.parent_path() / "hft-compressor" / "compressedData";
+    if (cwd.filename() == "hft-compressor") return cwd / "compressedData";
+    return cwd / "compressedData";
 }
 
 double ratio(const CompressionResult& result) noexcept {
@@ -96,50 +108,85 @@ std::string toMetricsJson(const CompressionResult& result) {
     std::ostringstream out;
     out << '{' << '\n';
     out << "  " << q << "status" << q << ": " << q << statusToString(result.status) << q << ',' << '\n';
-    out << "  " << q << "codec" << q << ": " << q << result.codec << q << ',' << '\n';
+    out << "  " << q << "pipeline_id" << q << ": " << q << result.pipelineId << q << ',' << '\n';
+    out << "  " << q << "representation" << q << ": " << q << result.representation << q << ',' << '\n';
+    out << "  " << q << "transform" << q << ": " << q << result.transform << q << ',' << '\n';
+    out << "  " << q << "entropy" << q << ": " << q << result.entropy << q << ',' << '\n';
+    out << "  " << q << "profile" << q << ": " << q << result.profile << q << ',' << '\n';
     out << "  " << q << "stream" << q << ": " << q << streamTypeToString(result.streamType) << q << ',' << '\n';
     out << "  " << q << "input_bytes" << q << ": " << result.inputBytes << ',' << '\n';
     out << "  " << q << "output_bytes" << q << ": " << result.outputBytes << ',' << '\n';
     out << "  " << q << "compression_ratio" << q << ": " << ratio(result) << ',' << '\n';
+    out << "  " << q << "line_count" << q << ": " << result.lineCount << ',' << '\n';
+    out << "  " << q << "block_count" << q << ": " << result.blockCount << ',' << '\n';
+    out << "  " << q << "encode_ns" << q << ": " << result.encodeNs << ',' << '\n';
+    out << "  " << q << "decode_ns" << q << ": " << result.decodeNs << ',' << '\n';
+    out << "  " << q << "encode_cycles" << q << ": " << result.encodeCycles << ',' << '\n';
+    out << "  " << q << "decode_cycles" << q << ": " << result.decodeCycles << ',' << '\n';
+    out << "  " << q << "encode_mb_per_sec" << q << ": " << encodeMbPerSec(result) << ',' << '\n';
+    out << "  " << q << "decode_mb_per_sec" << q << ": " << decodeMbPerSec(result) << ',' << '\n';
     out << "  " << q << "roundtrip_ok" << q << ": " << (result.roundtripOk ? "true" : "false") << '\n';
     out << '}' << '\n';
     return out.str();
 }
 
-CompressionResult compressFile(const CompressionRequest& request) noexcept {
+CompressionResult compress(const CompressionRequest& request) noexcept {
+    const auto* pipeline = findPipeline(request.pipelineId);
+    if (pipeline == nullptr) {
+        auto result = fail(Status::UnsupportedPipeline, request, nullptr, "unknown pipeline id");
+        metrics::recordRun(result);
+        return result;
+    }
+    if (pipeline->availability == PipelineAvailability::DependencyUnavailable) {
+        auto result = fail(Status::DependencyUnavailable, request, pipeline, std::string{pipeline->availabilityReason});
+        metrics::recordRun(result);
+        return result;
+    }
+    if (pipeline->availability == PipelineAvailability::NotImplemented) {
+        auto result = fail(Status::NotImplemented, request, pipeline, std::string{pipeline->availabilityReason});
+        metrics::recordRun(result);
+        return result;
+    }
+    if (pipeline->id != std::string_view{"std.zstd_jsonl_blocks_v1"}) {
+        auto result = fail(Status::UnsupportedPipeline, request, pipeline, "pipeline has no compressor implementation");
+        metrics::recordRun(result);
+        return result;
+    }
+
 #if !HFT_COMPRESSOR_WITH_ZSTD
-    auto result = fail(Status::DependencyUnavailable, request, "libzstd was not found at configure time");
+    auto result = fail(Status::DependencyUnavailable, request, pipeline, "libzstd was not found at configure time");
     metrics::recordRun(result);
     return result;
 #else
     if (request.inputPath.empty()) {
-        auto result = fail(Status::InvalidArgument, request, "input path is empty");
+        auto result = fail(Status::InvalidArgument, request, pipeline, "input path is empty");
         metrics::recordRun(result);
         return result;
     }
     const StreamType streamType = inferStreamTypeFromPath(request.inputPath);
     if (streamType == StreamType::Unknown) {
-        auto result = fail(Status::UnsupportedStream, request, "expected trades.jsonl, bookticker.jsonl, or depth.jsonl");
+        auto result = fail(Status::UnsupportedStream, request, pipeline, "expected trades.jsonl, bookticker.jsonl, or depth.jsonl");
         metrics::recordRun(result);
         return result;
     }
     std::vector<std::uint8_t> input;
     if (!readFileBytes(request.inputPath, input)) {
-        auto result = fail(Status::IoError, request, "failed to read input file");
+        auto result = fail(Status::IoError, request, pipeline, "failed to read input file");
         metrics::recordRun(result);
         return result;
     }
     const auto blockBytes = std::max<std::uint32_t>(request.blockBytes, 4096u);
-    const auto outputPath = outputPathFor(request, streamType);
+    const auto outputPath = outputPathFor(request, *pipeline, streamType);
     std::error_code ec;
     std::filesystem::create_directories(outputPath.parent_path(), ec);
     if (ec) {
-        auto result = fail(Status::IoError, request, "failed to create output directory");
+        auto result = fail(Status::IoError, request, pipeline, "failed to create output directory");
         metrics::recordRun(result);
         return result;
     }
 
     CompressionResult result{};
+    applyPipeline(result, pipeline);
     result.streamType = streamType;
     result.inputPath = request.inputPath;
     result.outputPath = outputPath;
@@ -148,7 +195,7 @@ CompressionResult compressFile(const CompressionRequest& request) noexcept {
 
     std::ofstream out(outputPath, std::ios::binary | std::ios::trunc);
     if (!out) {
-        auto failed = fail(Status::IoError, request, "failed to open output file");
+        auto failed = fail(Status::IoError, request, pipeline, "failed to open output file");
         metrics::recordRun(failed);
         return failed;
     }
@@ -171,7 +218,7 @@ CompressionResult compressFile(const CompressionRequest& request) noexcept {
         compressed.resize(bound);
         const auto written = ZSTD_compress(compressed.data(), compressed.size(), input.data() + offset, plainSize, request.zstdLevel);
         if (ZSTD_isError(written)) {
-            auto failed = fail(Status::DecodeError, request, ZSTD_getErrorName(written));
+            auto failed = fail(Status::DecodeError, request, pipeline, ZSTD_getErrorName(written));
             metrics::recordRun(failed);
             return failed;
         }
@@ -199,7 +246,7 @@ CompressionResult compressFile(const CompressionRequest& request) noexcept {
     out.write(reinterpret_cast<const char*>(finalHeader.data()), static_cast<std::streamsize>(finalHeader.size()));
     out.close();
     if (!out) {
-        auto failed = fail(Status::IoError, request, "failed to write compressed file");
+        auto failed = fail(Status::IoError, request, pipeline, "failed to write compressed file");
         metrics::recordRun(failed);
         return failed;
     }
@@ -210,7 +257,7 @@ CompressionResult compressFile(const CompressionRequest& request) noexcept {
         bool decodedMatchesInput = true;
         const auto decodeStartNs = timing::nowNs();
         const auto decodeStartCycles = timing::readCycles();
-        const auto decodeStatus = decodeBuffer(compressedFile, [&](std::span<const std::uint8_t> block) {
+        const auto decodeStatus = decodeHfcBuffer(compressedFile, [&](std::span<const std::uint8_t> block) {
             if (decodedOffset + block.size() > input.size()) {
                 decodedMatchesInput = false;
                 return false;
@@ -232,7 +279,7 @@ CompressionResult compressFile(const CompressionRequest& request) noexcept {
 #endif
 }
 
-Status decodeBuffer(std::span<const std::uint8_t> compressedFile,
+Status decodeHfcBuffer(std::span<const std::uint8_t> compressedFile,
                     const DecodedBlockCallback& onBlock) noexcept {
 #if !HFT_COMPRESSOR_WITH_ZSTD
     (void)compressedFile;

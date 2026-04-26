@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\be0h\PycharmProjects\course project\CXETCPP\apps\hft-compressor\src\main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\be0h\PycharmProjects\course project\CXETCPP\apps\hft-compressor\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{6B1999DC-0AB2-3409-8A4E-2115E95BC2B7}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

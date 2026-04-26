@@ -9,7 +9,9 @@ enum class Status {
     InvalidArgument,
     IoError,
     UnsupportedStream,
+    UnsupportedPipeline,
     DependencyUnavailable,
+    NotImplemented,
     CorruptData,
     DecodeError,
 };
@@ -22,7 +24,9 @@ constexpr std::string_view statusToString(Status status) noexcept {
         case Status::InvalidArgument: return "invalid_argument";
         case Status::IoError: return "io_error";
         case Status::UnsupportedStream: return "unsupported_stream";
+        case Status::UnsupportedPipeline: return "unsupported_pipeline";
         case Status::DependencyUnavailable: return "dependency_unavailable";
+        case Status::NotImplemented: return "not_implemented";
         case Status::CorruptData: return "corrupt_data";
         case Status::DecodeError: return "decode_error";
     }

@@ -13,7 +13,12 @@ namespace hft_compressor {
 struct CompressionResult {
     Status status{Status::Ok};
     std::string error{};
-    std::string codec{"zstd_jsonl_blocks_v1"};
+    std::string pipelineId{};
+    std::string representation{};
+    std::string transform{};
+    std::string entropy{};
+    std::string profile{};
+    std::string implementationKind{};
     StreamType streamType{StreamType::Unknown};
     std::filesystem::path inputPath{};
     std::filesystem::path outputPath{};

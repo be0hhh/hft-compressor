@@ -30,6 +30,7 @@ add_library(hft_compressor_core SHARED
     src/format.cpp
     src/metrics.cpp
     src/metrics_server.cpp
+    src/pipeline.cpp
     src/stream_type.cpp
     src/timing.cpp
 )
