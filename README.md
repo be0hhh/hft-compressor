@@ -35,6 +35,19 @@ The compressed file may be loaded into memory by consumers. Decoding is block
 streaming: one compressed block is decompressed into scratch memory, emitted to
 the caller, and then discarded.
 
+## Source layout
+
+New implementations should be added in separate folders, then registered in the
+pipeline registry:
+
+- `src/codecs/<codec_or_method>/` - codec/pipeline bodies such as zstd JSONL blocks, future lz4, rANS, PFor, delta+varint, or orderbook-specific methods.
+- `src/container/hfc/` - shared `.hfc` file and block container format.
+- `src/pipelines/` - pipeline descriptors and availability metadata.
+- `src/common/` - small shared helpers used by implementations.
+
+The public API stays in `include/hft_compressor/`; consumers should not include
+private files from `src/`.
+
 ## Public API
 
 Use `listPipelines()` to discover available and planned pipelines, then call

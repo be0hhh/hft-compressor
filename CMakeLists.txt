@@ -26,15 +26,22 @@ else()
 endif()
 
 add_library(hft_compressor_core SHARED
+    src/codecs/zstd_jsonl_blocks/ZstdJsonlBlocks.cpp
+    src/common/CompressionInternals.cpp
+    src/common/timing.cpp
     src/compressor.cpp
-    src/format.cpp
+    src/container/hfc/format.cpp
     src/metrics.cpp
     src/metrics_server.cpp
-    src/pipeline.cpp
+    src/pipelines/PipelineRegistry.cpp
     src/stream_type.cpp
-    src/timing.cpp
 )
-target_include_directories(hft_compressor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(hft_compressor_core
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 target_compile_features(hft_compressor_core PUBLIC cxx_std_23)
 target_compile_definitions(hft_compressor_core PUBLIC HFT_COMPRESSOR_WITH_ZSTD=$<BOOL:${HFT_COMPRESSOR_WITH_ZSTD}> HFT_COMPRESSOR_SHARED PRIVATE HFT_COMPRESSOR_BUILDING_LIBRARY)
 target_link_libraries(hft_compressor_core PUBLIC Threads::Threads)

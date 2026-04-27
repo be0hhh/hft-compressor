@@ -75,6 +75,17 @@ int main() {
     });
     assert(hft_compressor::isOk(status));
     assert(decoded == "[1,2,1,100]\n[2,3,0,200]\n");
+
+    hft_compressor::CompressionRequest exactRequest{};
+    exactRequest.inputPath = input;
+    exactRequest.outputPathOverride = dir / "session" / "compressed" / "zstd" / "trades.hfc";
+    exactRequest.pipelineId = "std.zstd_jsonl_blocks_v1";
+    const auto exactResult = hft_compressor::compress(exactRequest);
+    assert(hft_compressor::isOk(exactResult.status));
+    assert(exactResult.outputPath == exactRequest.outputPathOverride);
+    assert(exactResult.metricsPath == exactRequest.outputPathOverride.parent_path() / "trades.metrics.json");
+    assert(fs::exists(exactResult.outputPath));
+    assert(fs::exists(exactResult.metricsPath));
 #else
     assert(result.status == hft_compressor::Status::DependencyUnavailable);
 #endif

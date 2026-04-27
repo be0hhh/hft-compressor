@@ -15,6 +15,7 @@ namespace hft_compressor {
 struct CompressionRequest {
     std::filesystem::path inputPath{};
     std::filesystem::path outputRoot{};
+    std::filesystem::path outputPathOverride{};
     std::string pipelineId{};
     std::uint32_t blockBytes{1024u * 1024u};
     int zstdLevel{3};
