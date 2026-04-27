@@ -1,12 +1,35 @@
-#include "hft_compressor/compressor.hpp"
+﻿#include "hft_compressor/compressor.hpp"
 
+#include <array>
 #include <sstream>
+#include <string_view>
 
 #include "codecs/zstd_jsonl_blocks/ZstdJsonlBlocks.hpp"
 #include "common/CompressionInternals.hpp"
 #include "hft_compressor/metrics.hpp"
 
 namespace hft_compressor {
+namespace {
+
+using PipelineRunner = CompressionResult (*)(const CompressionRequest&, const PipelineDescriptor&) noexcept;
+
+struct RunnerRegistration {
+    std::string_view pipelineId{};
+    PipelineRunner runner{nullptr};
+};
+
+constexpr std::array<RunnerRegistration, 1> kRunnerRegistry{{
+    {"std.zstd_jsonl_blocks_v1", codecs::zstd_jsonl_blocks::compress},
+}};
+
+PipelineRunner findRunner(std::string_view pipelineId) noexcept {
+    for (const auto& runner : kRunnerRegistry) {
+        if (runner.pipelineId == pipelineId) return runner.runner;
+    }
+    return nullptr;
+}
+
+}  // namespace
 
 std::filesystem::path defaultOutputRoot() {
     const auto cwd = std::filesystem::current_path();
@@ -29,6 +52,12 @@ double encodeMbPerSec(const CompressionResult& result) noexcept {
 double decodeMbPerSec(const CompressionResult& result) noexcept {
     if (result.decodeNs == 0u) return 0.0;
     return (static_cast<double>(result.inputBytes) / (1024.0 * 1024.0))
+        / (static_cast<double>(result.decodeNs) / 1000000000.0);
+}
+
+double decodeMbPerSec(const DecodeVerifyResult& result) noexcept {
+    if (result.decodeNs == 0u) return 0.0;
+    return (static_cast<double>(result.decodedBytes) / (1024.0 * 1024.0))
         / (static_cast<double>(result.decodeNs) / 1000000000.0);
 }
 
@@ -76,8 +105,8 @@ CompressionResult compress(const CompressionRequest& request) noexcept {
         metrics::recordRun(result);
         return result;
     }
-    if (pipeline->id == std::string_view{"std.zstd_jsonl_blocks_v1"}) {
-        return codecs::zstd_jsonl_blocks::compress(request, *pipeline);
+    if (const auto runner = findRunner(pipeline->id); runner != nullptr) {
+        return runner(request, *pipeline);
     }
 
     auto result = internal::fail(Status::UnsupportedPipeline, request, pipeline, "pipeline has no compressor implementation");
@@ -91,3 +120,5 @@ Status decodeHfcBuffer(std::span<const std::uint8_t> compressedFile,
 }
 
 }  // namespace hft_compressor
+
+

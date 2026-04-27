@@ -1,4 +1,4 @@
-#include <cassert>
+﻿#include <cassert>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "hft_compressor/compressor.hpp"
+#include "hft_compressor/metrics.hpp"
 
 namespace fs = std::filesystem;
 
@@ -76,6 +77,30 @@ int main() {
     assert(hft_compressor::isOk(status));
     assert(decoded == "[1,2,1,100]\n[2,3,0,200]\n");
 
+    hft_compressor::DecodeVerifyRequest verifyRequest{};
+    verifyRequest.compressedPath = result.outputPath;
+    verifyRequest.canonicalPath = input;
+    verifyRequest.pipelineId = "std.zstd_jsonl_blocks_v1";
+    const auto verifyResult = hft_compressor::decodeAndVerify(verifyRequest);
+    assert(hft_compressor::isOk(verifyResult.status));
+    assert(verifyResult.verified);
+    assert(verifyResult.decodedBytes == result.inputBytes);
+    assert(verifyResult.canonicalBytes == result.inputBytes);
+    assert(fs::exists(verifyResult.metricsPath));
+
+    const auto changedCanonical = dir / "trades_changed.jsonl";
+    writeFile(changedCanonical, "[1,2,1,100]\n[2,3,0,201]\n");
+    verifyRequest.canonicalPath = changedCanonical;
+    const auto mismatchResult = hft_compressor::decodeAndVerify(verifyRequest);
+    assert(mismatchResult.status == hft_compressor::Status::VerificationFailed);
+    assert(!mismatchResult.verified);
+    assert(mismatchResult.mismatchBytes > 0u);
+    assert(mismatchResult.mismatchPercent > 0.0);
+
+    verifyRequest.compressedPath = dir / "missing.hfc";
+    verifyRequest.canonicalPath = input;
+    assert(hft_compressor::decodeAndVerify(verifyRequest).status == hft_compressor::Status::IoError);
+
     hft_compressor::CompressionRequest exactRequest{};
     exactRequest.inputPath = input;
     exactRequest.outputPathOverride = dir / "session" / "compressed" / "zstd" / "trades.hfc";
@@ -86,8 +111,27 @@ int main() {
     assert(exactResult.metricsPath == exactRequest.outputPathOverride.parent_path() / "trades.metrics.json");
     assert(fs::exists(exactResult.outputPath));
     assert(fs::exists(exactResult.metricsPath));
+    const auto bookTickerInput = dir / "bookticker.jsonl";
+    writeFile(bookTickerInput, "[1,2,3,4]\n[2,3,4,5]\n");
+    hft_compressor::CompressionRequest bookTickerRequest{};
+    bookTickerRequest.inputPath = bookTickerInput;
+    bookTickerRequest.outputRoot = dir / "compressedData";
+    bookTickerRequest.pipelineId = "std.zstd_jsonl_blocks_v1";
+    const auto bookTickerResult = hft_compressor::compress(bookTickerRequest);
+    assert(hft_compressor::isOk(bookTickerResult.status));
+
+    std::string prometheus;
+    hft_compressor::metrics::renderPrometheus(prometheus);
+    assert(prometheus.find("hft_compressor_run_ratio") != std::string::npos);
+    assert(prometheus.find("pipeline_id=\"std.zstd_jsonl_blocks_v1\"") != std::string::npos);
+    assert(prometheus.find("stream=\"trades\"") != std::string::npos);
+    assert(prometheus.find("stream=\"bookticker\"") != std::string::npos);
+    assert(prometheus.find("hft_compressor_verify") == std::string::npos);
 #else
     assert(result.status == hft_compressor::Status::DependencyUnavailable);
 #endif
     return 0;
 }
+
+
+

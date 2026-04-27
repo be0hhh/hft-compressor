@@ -34,9 +34,36 @@ struct CompressionResult {
     bool roundtripOk{false};
 };
 
+struct DecodeVerifyResult {
+    Status status{Status::Ok};
+    std::string error{};
+    std::string pipelineId{};
+    std::string profile{};
+    StreamType streamType{StreamType::Unknown};
+    std::filesystem::path compressedPath{};
+    std::filesystem::path canonicalPath{};
+    std::filesystem::path metricsPath{};
+    std::uint64_t compressedBytes{0};
+    std::uint64_t decodedBytes{0};
+    std::uint64_t canonicalBytes{0};
+    std::uint64_t comparedBytes{0};
+    std::uint64_t mismatchBytes{0};
+    double mismatchPercent{0.0};
+    std::uint64_t lineCount{0};
+    std::uint64_t blockCount{0};
+    std::uint64_t decodeNs{0};
+    std::uint64_t decodeCycles{0};
+    bool verified{false};
+    std::uint64_t firstMismatchOffset{0};
+    std::string firstMismatchPreviewCanonical{};
+    std::string firstMismatchPreviewDecoded{};
+};
+
 HFT_COMPRESSOR_API double ratio(const CompressionResult& result) noexcept;
 HFT_COMPRESSOR_API double encodeMbPerSec(const CompressionResult& result) noexcept;
 HFT_COMPRESSOR_API double decodeMbPerSec(const CompressionResult& result) noexcept;
+HFT_COMPRESSOR_API double decodeMbPerSec(const DecodeVerifyResult& result) noexcept;
 HFT_COMPRESSOR_API std::string toMetricsJson(const CompressionResult& result);
+HFT_COMPRESSOR_API std::string toVerifyMetricsJson(const DecodeVerifyResult& result);
 
 }  // namespace hft_compressor

@@ -21,10 +21,18 @@ struct CompressionRequest {
     int zstdLevel{3};
 };
 
+struct DecodeVerifyRequest {
+    std::filesystem::path compressedPath{};
+    std::filesystem::path canonicalPath{};
+    std::string pipelineId{"std.zstd_jsonl_blocks_v1"};
+    bool verifyBytes{true};
+};
+
 using DecodedBlockCallback = std::function<bool(std::span<const std::uint8_t> block)>;
 
 HFT_COMPRESSOR_API std::filesystem::path defaultOutputRoot();
 HFT_COMPRESSOR_API CompressionResult compress(const CompressionRequest& request) noexcept;
+HFT_COMPRESSOR_API DecodeVerifyResult decodeAndVerify(const DecodeVerifyRequest& request) noexcept;
 HFT_COMPRESSOR_API Status decodeHfcBuffer(std::span<const std::uint8_t> compressedFile,
                     const DecodedBlockCallback& onBlock) noexcept;
 

@@ -14,6 +14,7 @@ enum class Status {
     NotImplemented,
     CorruptData,
     DecodeError,
+    VerificationFailed,
 };
 
 constexpr bool isOk(Status status) noexcept { return status == Status::Ok; }
@@ -29,6 +30,7 @@ constexpr std::string_view statusToString(Status status) noexcept {
         case Status::NotImplemented: return "not_implemented";
         case Status::CorruptData: return "corrupt_data";
         case Status::DecodeError: return "decode_error";
+        case Status::VerificationFailed: return "verification_failed";
     }
     return "unknown";
 }
