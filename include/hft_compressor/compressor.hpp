@@ -37,6 +37,7 @@ enum class ReplayRecordKind : std::uint8_t {
     Unknown = 0u,
     Trade = 1u,
     BookTicker = 2u,
+    Depth = 3u,
 };
 
 inline constexpr std::size_t kReplaySymbolBytes = 32u;
@@ -44,21 +45,13 @@ inline constexpr std::size_t kReplayExchangeBytes = 24u;
 inline constexpr std::size_t kReplayMarketBytes = 24u;
 
 struct ReplayTradeRecord {
-    std::uint64_t tradeId{0};
-    std::uint64_t firstTradeId{0};
-    std::uint64_t lastTradeId{0};
     std::array<char, kReplaySymbolBytes> symbol{};
     std::array<char, kReplayExchangeBytes> exchange{};
     std::array<char, kReplayMarketBytes> market{};
     std::int64_t tsNs{0};
-    std::int64_t captureSeq{0};
-    std::int64_t ingestSeq{0};
     std::int64_t priceE8{0};
     std::int64_t qtyE8{0};
-    std::int64_t quoteQtyE8{0};
     std::int64_t side{0};
-    std::uint8_t isBuyerMaker{0};
-    std::uint8_t sideBuy{0};
 };
 
 struct ReplayBookTickerRecord {
@@ -66,18 +59,28 @@ struct ReplayBookTickerRecord {
     std::array<char, kReplayExchangeBytes> exchange{};
     std::array<char, kReplayMarketBytes> market{};
     std::int64_t tsNs{0};
-    std::int64_t captureSeq{0};
-    std::int64_t ingestSeq{0};
     std::int64_t bidPriceE8{0};
     std::int64_t bidQtyE8{0};
     std::int64_t askPriceE8{0};
     std::int64_t askQtyE8{0};
 };
 
+struct ReplayDepthLevel {
+    std::int64_t priceE8{0};
+    std::int64_t qtyE8{0};
+    std::int64_t side{0};
+};
+
+struct ReplayDepthRecord {
+    std::int64_t tsNs{0};
+    std::vector<ReplayDepthLevel> levels{};
+};
+
 struct ReplayRecord {
     ReplayRecordKind kind{ReplayRecordKind::Unknown};
     ReplayTradeRecord trade{};
     ReplayBookTickerRecord bookTicker{};
+    ReplayDepthRecord depth{};
 };
 
 using DecodedRecordCallback = std::function<bool(const ReplayRecord& record)>;

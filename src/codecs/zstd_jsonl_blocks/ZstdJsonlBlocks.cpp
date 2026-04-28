@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <charconv>
 #include <fstream>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -67,6 +69,114 @@ bool validHeaderCrc(const format::FileHeader& fileHeader) noexcept {
         || format::storedHeaderCrc32c(fileHeader) == format::headerCrc32c(fileHeader);
 }
 
+struct JsonCursor {
+    std::string_view text{};
+    std::size_t pos{0};
+
+    void skipSpaces() noexcept {
+        while (pos < text.size()) {
+            const char c = text[pos];
+            if (c != ' ' && c != '\t' && c != '\r') break;
+            ++pos;
+        }
+    }
+
+    bool consume(char c) noexcept {
+        skipSpaces();
+        if (pos >= text.size() || text[pos] != c) return false;
+        ++pos;
+        return true;
+    }
+
+    bool peek(char c) noexcept {
+        skipSpaces();
+        return pos < text.size() && text[pos] == c;
+    }
+
+    bool parseInt64(std::int64_t& out) noexcept {
+        skipSpaces();
+        if (pos >= text.size()) return false;
+        const char* begin = text.data() + pos;
+        const char* end = text.data() + text.size();
+        const auto [ptr, ec] = std::from_chars(begin, end, out);
+        if (ec != std::errc{} || ptr == begin) return false;
+        pos = static_cast<std::size_t>(ptr - text.data());
+        return true;
+    }
+
+    bool finish() noexcept {
+        skipSpaces();
+        return pos == text.size();
+    }
+};
+
+bool parseSide(std::int64_t& side) noexcept {
+    return side == 0 || side == 1;
+}
+
+bool validTradeLine(std::string_view line) noexcept {
+    JsonCursor p{line};
+    std::int64_t value = 0;
+    std::int64_t side = 0;
+    return p.consume('[')
+        && p.parseInt64(value) && p.consume(',')
+        && p.parseInt64(value) && p.consume(',')
+        && p.parseInt64(side) && parseSide(side) && p.consume(',')
+        && p.parseInt64(value)
+        && p.consume(']') && p.finish();
+}
+
+bool validBookTickerLine(std::string_view line) noexcept {
+    JsonCursor p{line};
+    std::int64_t value = 0;
+    return p.consume('[')
+        && p.parseInt64(value) && p.consume(',')
+        && p.parseInt64(value) && p.consume(',')
+        && p.parseInt64(value) && p.consume(',')
+        && p.parseInt64(value) && p.consume(',')
+        && p.parseInt64(value)
+        && p.consume(']') && p.finish();
+}
+
+bool validDepthLevel(JsonCursor& p) noexcept {
+    std::int64_t value = 0;
+    std::int64_t side = 0;
+    return p.consume('[')
+        && p.parseInt64(value) && p.consume(',')
+        && p.parseInt64(value) && p.consume(',')
+        && p.parseInt64(side) && parseSide(side)
+        && p.consume(']');
+}
+
+bool validDepthLine(std::string_view line) noexcept {
+    JsonCursor p{line};
+    std::int64_t tsNs = 0;
+    if (!p.consume('[')) return false;
+    if (p.peek(']')) return false;
+    while (p.peek('[')) {
+        if (!validDepthLevel(p) || !p.consume(',')) return false;
+    }
+    return p.parseInt64(tsNs) && p.consume(']') && p.finish();
+}
+
+bool validateStrictJsonl(std::span<const std::uint8_t> input, StreamType streamType) noexcept {
+    std::size_t lineStart = 0;
+    while (lineStart < input.size()) {
+        std::size_t lineEnd = lineStart;
+        while (lineEnd < input.size() && input[lineEnd] != static_cast<std::uint8_t>('\n')) ++lineEnd;
+        std::string_view line{reinterpret_cast<const char*>(input.data() + lineStart), lineEnd - lineStart};
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (line.empty()) return false;
+        const bool ok = streamType == StreamType::Trades ? validTradeLine(line)
+            : streamType == StreamType::BookTicker ? validBookTickerLine(line)
+            : streamType == StreamType::Depth ? validDepthLine(line)
+            : false;
+        if (!ok) return false;
+        lineStart = lineEnd + (lineEnd < input.size() ? 1u : 0u);
+    }
+    return true;
+}
+
 }  // namespace
 
 CompressionResult compress(const CompressionRequest& request, const PipelineDescriptor& pipeline) noexcept {
@@ -89,6 +199,11 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     std::vector<std::uint8_t> input;
     if (!internal::readFileBytes(request.inputPath, input)) {
         auto result = internal::fail(Status::IoError, request, &pipeline, "failed to read input file");
+        metrics::recordRun(result);
+        return result;
+    }
+    if (!validateStrictJsonl(input, streamType)) {
+        auto result = internal::fail(Status::CorruptData, request, &pipeline, "input is not strict canonical jsonl for stream");
         metrics::recordRun(result);
         return result;
     }

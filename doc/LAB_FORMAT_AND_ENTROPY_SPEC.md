@@ -9,6 +9,21 @@ into the public API. They must not construct paths such as `<channel>.hfc` or
 depend on `.hfc`, zstd, range coder, rANS, arithmetic coding, block CRCs, or
 container internals.
 
+The compressor is also the format adapter boundary for backtests and exchange
+simulation. It may accept multiple artifact families over time, including raw
+JSONL, `.hfc`, `cxcef`, or future binary/container formats. Regardless of input
+format, replay-facing decode must expose a stable stream contract to consumers.
+For the current baseline that contract is canonical JSONL bytes. Future binary
+winners may additionally expose compressor-owned neutral records through
+`decodeReplayRecords()`, but those records are still an interchange format, not
+CXETCPP internal primitives.
+
+Compressed input may be memory-resident for the MVP and for fast random access
+plans. Decoded replay data must be streamed to the parser and must not be held as
+a fully materialized decoded file. The parser/replay layer owns line splitting,
+normalization into CXETCPP rows or primitives, event ordering, timing policy, and
+dispatch to recorder, GUI, callbacks, queues, or algorithms.
+
 `.hfc` is the current HFT Compressor Container for
 `std.zstd_jsonl_blocks_v1`. It is supported as the present JSONL-block zstd
 baseline, not selected as the final production replay format.
@@ -28,6 +43,31 @@ manifest or header:
 The current discovery API may resolve today's `.hfc` files, but that policy
 lives inside the compressor library so future lab winners can change paths or
 extensions without replay code changes.
+
+## Replay Integration Plan
+
+Backtest and exchange-simulation callers should use the compressor as the single
+artifact reader and decoder:
+
+```text
+artifact path/root + session + stream + preference
+  -> hft-compressor discover/decode
+  -> stable decoded stream
+  -> CXETCPP/recorder parser
+  -> normalized replay events
+  -> algorithm, recorder, GUI, or any other consumer
+```
+
+The parser should not care whether the source artifact was JSONL, `.hfc`,
+`cxcef`, or a later custom compressed format. It should only care about the
+stable decoded data contract emitted by the compressor. For JSONL-block outputs,
+the integration layer keeps a small carry buffer for partial lines between
+decoded blocks and submits complete lines to the existing stream-specific
+parsers: trades, bookticker, and depth.
+
+To simulate a live exchange, replay code should inject parsed events into the
+same callback, queue, or adapter path used by live capture. Compression and file
+layout decisions stay below that line.
 
 ## Candidate Matrix
 

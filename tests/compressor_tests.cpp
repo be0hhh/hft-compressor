@@ -209,7 +209,7 @@ int main() {
     assert(fs::exists(exactResult.outputPath));
     assert(fs::exists(exactResult.metricsPath));
     const auto bookTickerInput = dir / "bookticker.jsonl";
-    writeFile(bookTickerInput, "[1,2,3,4]\n[2,3,4,5]\n");
+    writeFile(bookTickerInput, "[1,2,3,4,100]\n[2,3,4,5,200]\n");
     hft_compressor::CompressionRequest bookTickerRequest{};
     bookTickerRequest.inputPath = bookTickerInput;
     bookTickerRequest.outputRoot = dir / "compressedData";
@@ -217,18 +217,46 @@ int main() {
     const auto bookTickerResult = hft_compressor::compress(bookTickerRequest);
     assert(hft_compressor::isOk(bookTickerResult.status));
 
+    const auto depthInput = dir / "depth.jsonl";
+    writeFile(depthInput, "[[100,1,0],[101,2,1],123]\n");
+    hft_compressor::CompressionRequest depthRequest{};
+    depthRequest.inputPath = depthInput;
+    depthRequest.outputRoot = dir / "compressedData";
+    depthRequest.pipelineId = "std.zstd_jsonl_blocks_v1";
+    const auto depthResult = hft_compressor::compress(depthRequest);
+    assert(hft_compressor::isOk(depthResult.status));
+    assert(depthResult.outputPath == dir / "compressedData" / "zstd" / "sessions" / "hft_compressor_tests" / "depth.hfc");
+
+    hft_compressor::ReplayArtifactRequest depthArtifactRequest{};
+    depthArtifactRequest.compressedRoot = depthRequest.outputRoot;
+    depthArtifactRequest.sessionDir = depthInput.parent_path();
+    depthArtifactRequest.streamType = hft_compressor::StreamType::Depth;
+    const auto depthArtifact = hft_compressor::discoverReplayArtifact(depthArtifactRequest);
+    assert(hft_compressor::isOk(depthArtifact.status));
+    assert(depthArtifact.found);
+    assert(depthArtifact.streamType == hft_compressor::StreamType::Depth);
+    assert(depthArtifact.path == depthResult.outputPath);
+
+    const auto oldDepthInput = dir / "old_depth" / "depth.jsonl";
+    fs::create_directories(oldDepthInput.parent_path());
+    writeFile(oldDepthInput, "[[[100,1,0,0]],[[101,2,1,0]],123]\n");
+    hft_compressor::CompressionRequest oldDepthRequest{};
+    oldDepthRequest.inputPath = oldDepthInput;
+    oldDepthRequest.outputRoot = dir / "old_compressedData";
+    oldDepthRequest.pipelineId = "std.zstd_jsonl_blocks_v1";
+    assert(hft_compressor::compress(oldDepthRequest).status == hft_compressor::Status::CorruptData);
+
     std::string prometheus;
     hft_compressor::metrics::renderPrometheus(prometheus);
     assert(prometheus.find("hft_compressor_run_ratio") != std::string::npos);
     assert(prometheus.find("pipeline_id=\"std.zstd_jsonl_blocks_v1\"") != std::string::npos);
     assert(prometheus.find("stream=\"trades\"") != std::string::npos);
     assert(prometheus.find("stream=\"bookticker\"") != std::string::npos);
+    assert(prometheus.find("stream=\"depth\"") != std::string::npos);
     assert(prometheus.find("hft_compressor_verify") == std::string::npos);
 #else
     assert(result.status == hft_compressor::Status::DependencyUnavailable);
 #endif
     return 0;
 }
-
-
 

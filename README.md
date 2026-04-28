@@ -37,6 +37,19 @@ session, stream, and preference; they should not construct `.hfc` paths.
 Decoding is block streaming: one compressed block is decompressed into scratch
 memory, emitted to the caller, and then discarded.
 
+The replay contract is format-in, stable-data-out. A caller may eventually pass
+raw JSONL, `.hfc`, `cxcef`, or another compressor-owned artifact format, but the
+consumer-facing replay API must emit one fixed decoded representation for the
+selected stream family. Today that representation is canonical JSONL bytes. The
+CXETCPP or recorder replay layer owns line splitting, parsing, normalization,
+event ordering, and delivery to algorithms or GUI code as if the data came from
+a live exchange.
+
+Compressed artifacts may be loaded into memory when that keeps the decoder
+simple or fast. Fully decoded corpora must not be materialized for replay. The
+decoded side is streamed block-by-block to the parser, which may keep only the
+small carry needed for a line crossing a block boundary.
+
 ## Source layout
 
 New implementations should be added in separate folders, then registered in the
@@ -71,6 +84,20 @@ compressor-owned neutral records instead of JSONL-compatible chunks.
 `decodeHfcFile()` and `decodeHfcBuffer()` remain baseline-specific helpers for
 callers that intentionally work with the current container. None of these APIs
 materializes the full decoded corpus.
+
+Backtest and exchange-simulation integrations should keep this flow:
+
+```text
+session artifact (.jsonl, .hfc, .cxcef, or future format)
+  -> hft-compressor discovery/decode
+  -> stable decoded stream, currently canonical JSONL blocks
+  -> CXETCPP/recorder parser and normalizer
+  -> replay rows, primitives, callbacks, queues, GUI, or algorithm code
+```
+
+The compressor must not depend on CXETCPP internals to create primitives. It is
+the lossless storage/decode boundary; parser and replay code decide where the
+normalized events go.
 
 CLI examples:
 
