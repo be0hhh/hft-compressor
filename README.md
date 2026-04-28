@@ -24,16 +24,18 @@ Only `std.zstd_jsonl_blocks_v1` is implemented today. The other descriptors are
 intentional placeholders for the coursework benchmark matrix and return
 `not_implemented` until their implementation is added.
 
-Implemented output:
+Current baseline output:
 
 ```text
 compressedData/zstd/sessions/<session>/<channel>.hfc
 compressedData/zstd/sessions/<session>/<channel>.metrics.json
 ```
 
-The compressed file may be loaded into memory by consumers. Decoding is block
-streaming: one compressed block is decompressed into scratch memory, emitted to
-the caller, and then discarded.
+This path and extension are implementation details of the current baseline.
+Replay consumers should ask the public API to discover an artifact for a root,
+session, stream, and preference; they should not construct `.hfc` paths.
+Decoding is block streaming: one compressed block is decompressed into scratch
+memory, emitted to the caller, and then discarded.
 
 ## Source layout
 
@@ -41,7 +43,7 @@ New implementations should be added in separate folders, then registered in the
 pipeline registry:
 
 - `src/codecs/<codec_or_method>/` - codec/pipeline bodies such as zstd JSONL blocks, future lz4, rANS, PFor, delta+varint, or orderbook-specific methods.
-- `src/container/hfc/` - shared `.hfc` file and block container format.
+- `src/container/hfc/` - current `.hfc` JSONL-block baseline container.
 - `src/pipelines/` - pipeline descriptors and availability metadata.
 - `src/common/` - small shared helpers used by implementations.
 
@@ -61,8 +63,14 @@ request.pipelineId = "std.zstd_jsonl_blocks_v1";
 const auto result = hft_compressor::compress(request);
 ```
 
-`decodeHfcBuffer()` decodes the current `.hfc` JSONL-block container through a
-block callback. It does not materialize the full decoded corpus.
+Replay-facing callers should use `discoverReplayArtifact()` and then
+`decodeReplayArtifactJsonl()`. The request names the compressed root, session,
+stream, and preference; compressor owns the path and format policy.
+`decodeReplayRecords()` is reserved for future binary winners that emit
+compressor-owned neutral records instead of JSONL-compatible chunks.
+`decodeHfcFile()` and `decodeHfcBuffer()` remain baseline-specific helpers for
+callers that intentionally work with the current container. None of these APIs
+materializes the full decoded corpus.
 
 CLI examples:
 

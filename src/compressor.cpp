@@ -119,6 +119,11 @@ Status decodeHfcBuffer(std::span<const std::uint8_t> compressedFile,
     return codecs::zstd_jsonl_blocks::decode(compressedFile, onBlock);
 }
 
+Status decodeHfcFile(const std::filesystem::path& path,
+                    const DecodedBlockCallback& onBlock) noexcept {
+    return codecs::zstd_jsonl_blocks::decodeFile(path, onBlock);
+}
+
 }  // namespace hft_compressor
 
 
