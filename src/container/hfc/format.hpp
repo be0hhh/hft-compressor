@@ -15,6 +15,10 @@ inline constexpr std::uint16_t kVersion1 = 1;
 inline constexpr std::uint16_t kVersion2 = 2;
 inline constexpr std::uint16_t kVersion = kVersion2;
 inline constexpr std::uint16_t kCodecZstdJsonlBlocksV1 = 1;
+inline constexpr std::uint16_t kCodecLz4JsonlBlocksV1 = 2;
+inline constexpr std::uint16_t kCodecBrotliJsonlBlocksV1 = 3;
+inline constexpr std::uint16_t kCodecXzJsonlBlocksV1 = 4;
+inline constexpr std::uint16_t kCodecGzipJsonlBlocksV1 = 5;
 inline constexpr std::size_t kFileHeaderBytes = 64;
 inline constexpr std::size_t kBlockHeaderBytes = 32;
 
@@ -57,3 +61,4 @@ std::uint16_t streamToWire(StreamType type) noexcept;
 StreamType streamFromWire(std::uint16_t value) noexcept;
 
 }  // namespace hft_compressor::format
+

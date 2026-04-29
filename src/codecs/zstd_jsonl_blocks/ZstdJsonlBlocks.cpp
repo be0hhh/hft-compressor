@@ -316,6 +316,30 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
 #endif
 }
 
+ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept {
+    ReplayArtifactInfo info{};
+    const auto hfcInfo = openHfcFile(path);
+    if (!isOk(hfcInfo.status)) {
+        info.status = hfcInfo.status;
+        info.error = hfcInfo.error.empty() ? "failed to open hfc artifact" : hfcInfo.error;
+        return info;
+    }
+    info.status = Status::Ok;
+    info.found = true;
+    info.path = path;
+    info.formatId = "hfc.zstd_jsonl_blocks_v1";
+    info.pipelineId = std::string{pipeline.id};
+    info.transform = std::string{pipeline.transform};
+    info.entropy = std::string{pipeline.entropy};
+    info.streamType = hfcInfo.streamType;
+    info.version = hfcInfo.version;
+    info.inputBytes = hfcInfo.inputBytes;
+    info.outputBytes = hfcInfo.outputBytes;
+    info.lineCount = hfcInfo.lineCount;
+    info.blockCount = hfcInfo.blockCount;
+    return info;
+}
+
 Status decode(std::span<const std::uint8_t> compressedFile, const DecodedBlockCallback& onBlock) noexcept {
 #if !HFT_COMPRESSOR_WITH_ZSTD
     (void)compressedFile;

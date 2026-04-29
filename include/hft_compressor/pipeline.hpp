@@ -25,6 +25,8 @@ struct PipelineDescriptor {
     PipelineAvailability availability{PipelineAvailability::NotImplemented};
     std::string_view availabilityReason{};
     std::string_view outputSlug{};
+    std::string_view fileExtension{".hfc"};
+    std::string_view capabilities{};
 };
 
 HFT_COMPRESSOR_API std::span<const PipelineDescriptor> listPipelines() noexcept;

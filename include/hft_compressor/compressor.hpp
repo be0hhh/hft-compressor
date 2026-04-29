@@ -24,11 +24,18 @@ struct CompressionRequest {
     int zstdLevel{3};
 };
 
+enum class VerifyMode : std::uint8_t {
+    ByteExact = 1u,
+    RecordExact = 2u,
+    Both = 3u,
+};
+
 struct DecodeVerifyRequest {
     std::filesystem::path compressedPath{};
     std::filesystem::path canonicalPath{};
     std::string pipelineId{"std.zstd_jsonl_blocks_v1"};
     bool verifyBytes{true};
+    VerifyMode verifyMode{VerifyMode::Both};
 };
 
 using DecodedBlockCallback = std::function<bool(std::span<const std::uint8_t> block)>;

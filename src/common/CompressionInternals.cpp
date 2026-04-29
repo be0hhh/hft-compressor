@@ -62,8 +62,9 @@ bool writeTextFile(const std::filesystem::path& path, const std::string& text) {
 std::filesystem::path outputPathFor(const CompressionRequest& request, const PipelineDescriptor& pipeline, StreamType streamType) {
     if (!request.outputPathOverride.empty()) return request.outputPathOverride;
     const auto root = request.outputRoot.empty() ? defaultOutputRoot() : request.outputRoot;
+    const std::string extension = pipeline.fileExtension.empty() ? ".hfc" : std::string{pipeline.fileExtension};
     return root / std::string{pipeline.outputSlug} / "sessions" / sessionIdForInput(request.inputPath)
-        / (std::string{streamTypeChannelName(streamType)} + ".hfc");
+        / (std::string{streamTypeChannelName(streamType)} + extension);
 }
 
 }  // namespace hft_compressor::internal

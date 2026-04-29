@@ -4,33 +4,11 @@
 #include <sstream>
 #include <string_view>
 
-#include "codecs/zstd_jsonl_blocks/ZstdJsonlBlocks.hpp"
 #include "common/CompressionInternals.hpp"
 #include "hft_compressor/metrics.hpp"
+#include "pipelines/PipelineBackend.hpp"
 
 namespace hft_compressor {
-namespace {
-
-using PipelineRunner = CompressionResult (*)(const CompressionRequest&, const PipelineDescriptor&) noexcept;
-
-struct RunnerRegistration {
-    std::string_view pipelineId{};
-    PipelineRunner runner{nullptr};
-};
-
-constexpr std::array<RunnerRegistration, 1> kRunnerRegistry{{
-    {"std.zstd_jsonl_blocks_v1", codecs::zstd_jsonl_blocks::compress},
-}};
-
-PipelineRunner findRunner(std::string_view pipelineId) noexcept {
-    for (const auto& runner : kRunnerRegistry) {
-        if (runner.pipelineId == pipelineId) return runner.runner;
-    }
-    return nullptr;
-}
-
-}  // namespace
-
 std::filesystem::path defaultOutputRoot() {
     const auto cwd = std::filesystem::current_path();
     if (cwd.filename() == "hft-recorder") return cwd.parent_path() / "hft-compressor" / "compressedData";
@@ -105,8 +83,8 @@ CompressionResult compress(const CompressionRequest& request) noexcept {
         metrics::recordRun(result);
         return result;
     }
-    if (const auto runner = findRunner(pipeline->id); runner != nullptr) {
-        return runner(request, *pipeline);
+    if (const auto* backend = pipelines::findBackend(pipeline->id); backend != nullptr && backend->compress != nullptr) {
+        return backend->compress(request, *pipeline);
     }
 
     auto result = internal::fail(Status::UnsupportedPipeline, request, pipeline, "pipeline has no compressor implementation");
@@ -116,12 +94,14 @@ CompressionResult compress(const CompressionRequest& request) noexcept {
 
 Status decodeHfcBuffer(std::span<const std::uint8_t> compressedFile,
                     const DecodedBlockCallback& onBlock) noexcept {
-    return codecs::zstd_jsonl_blocks::decode(compressedFile, onBlock);
+    const auto* backend = pipelines::findBackend("std.zstd_jsonl_blocks_v1");
+    return backend != nullptr && backend->decodeBuffer != nullptr ? backend->decodeBuffer(compressedFile, onBlock) : Status::NotImplemented;
 }
 
 Status decodeHfcFile(const std::filesystem::path& path,
                     const DecodedBlockCallback& onBlock) noexcept {
-    return codecs::zstd_jsonl_blocks::decodeFile(path, onBlock);
+    const auto* backend = pipelines::findBackend("std.zstd_jsonl_blocks_v1");
+    return backend != nullptr && backend->decodeJsonl != nullptr ? backend->decodeJsonl(path, onBlock) : Status::NotImplemented;
 }
 
 }  // namespace hft_compressor

@@ -79,8 +79,12 @@ const auto result = hft_compressor::compress(request);
 Replay-facing callers should use `discoverReplayArtifact()` and then
 `decodeReplayArtifactJsonl()`. The request names the compressed root, session,
 stream, and preference; compressor owns the path and format policy.
-`decodeReplayRecords()` is reserved for future binary winners that emit
-compressor-owned neutral records instead of JSONL-compatible chunks.
+For replay/backtest hot paths, prefer `decodeReplayRecordBatches()` from
+`hft_compressor/replay_decode.hpp`. It emits compressor-owned neutral typed
+record batches for trades, bookticker, and depth without exposing `.hfc` or any
+other container layout to the caller. The C ABI in `hft_compressor/c_api.h`
+offers the same batch stream through an opaque decoder handle for prebuilt
+library consumers.
 `decodeHfcFile()` and `decodeHfcBuffer()` remain baseline-specific helpers for
 callers that intentionally work with the current container. None of these APIs
 materializes the full decoded corpus.

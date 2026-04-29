@@ -22,11 +22,76 @@ constexpr std::string_view zstdAvailabilityReason() noexcept {
 #endif
 }
 
-constexpr std::array<PipelineDescriptor, 26> kPipelines{{
-    {"std.zstd_jsonl_blocks_v1", "Zstd JSONL blocks v1", "all", "jsonl_blocks", "raw_jsonl", "zstd", "archive", "c++", zstdAvailability(), zstdAvailabilityReason(), "zstd"},
-    {"std.lz4_jsonl_blocks_v1", "LZ4 JSONL blocks v1", "all", "jsonl_blocks", "raw_jsonl", "lz4", "live", "c++", PipelineAvailability::NotImplemented, "lz4 baseline is planned", "lz4"},
-    {"std.brotli_jsonl_blocks_v1", "Brotli JSONL blocks v1", "all", "jsonl_blocks", "raw_jsonl", "brotli", "archive", "c++", PipelineAvailability::NotImplemented, "brotli baseline is planned", "brotli"},
-    {"std.xz_jsonl_blocks_v1", "XZ JSONL blocks v1", "all", "jsonl_blocks", "raw_jsonl", "xz", "archive", "c++", PipelineAvailability::NotImplemented, "xz baseline is planned", "xz"},
+constexpr PipelineAvailability lz4Availability() noexcept {
+#if HFT_COMPRESSOR_WITH_LZ4
+    return PipelineAvailability::Available;
+#else
+    return PipelineAvailability::DependencyUnavailable;
+#endif
+}
+
+constexpr std::string_view lz4AvailabilityReason() noexcept {
+#if HFT_COMPRESSOR_WITH_LZ4
+    return "";
+#else
+    return "liblz4 was not found at configure time";
+#endif
+}
+
+constexpr PipelineAvailability brotliAvailability() noexcept {
+#if HFT_COMPRESSOR_WITH_BROTLI
+    return PipelineAvailability::Available;
+#else
+    return PipelineAvailability::DependencyUnavailable;
+#endif
+}
+
+constexpr std::string_view brotliAvailabilityReason() noexcept {
+#if HFT_COMPRESSOR_WITH_BROTLI
+    return "";
+#else
+    return "brotli encoder/decoder libraries were not found at configure time";
+#endif
+}
+
+constexpr PipelineAvailability lzmaAvailability() noexcept {
+#if HFT_COMPRESSOR_WITH_LZMA
+    return PipelineAvailability::Available;
+#else
+    return PipelineAvailability::DependencyUnavailable;
+#endif
+}
+
+constexpr std::string_view lzmaAvailabilityReason() noexcept {
+#if HFT_COMPRESSOR_WITH_LZMA
+    return "";
+#else
+    return "liblzma was not found at configure time";
+#endif
+}
+
+constexpr PipelineAvailability zlibAvailability() noexcept {
+#if HFT_COMPRESSOR_WITH_ZLIB
+    return PipelineAvailability::Available;
+#else
+    return PipelineAvailability::DependencyUnavailable;
+#endif
+}
+
+constexpr std::string_view zlibAvailabilityReason() noexcept {
+#if HFT_COMPRESSOR_WITH_ZLIB
+    return "";
+#else
+    return "zlib was not found at configure time";
+#endif
+}
+constexpr std::array<PipelineDescriptor, 28> kPipelines{{
+    {"std.zstd_jsonl_blocks_v1", "Zstd JSONL blocks v1", "all", "jsonl_blocks", "raw_jsonl", "zstd", "archive", "c++", zstdAvailability(), zstdAvailabilityReason(), "zstd", ".hfc", "jsonl_blocks,record_batches,streaming_decode,file_streaming,archive,replay_ready"},
+    {"std.raw_jsonl_blocks_v1", "Raw JSONL blocks v1", "all", "jsonl_blocks", "raw_jsonl", "none", "research", "c++", PipelineAvailability::Available, "", "raw-jsonl", ".hfr", "jsonl_blocks,record_batches,streaming_decode,file_streaming,lab_baseline,replay_ready"},
+    {"std.lz4_jsonl_blocks_v1", "LZ4 JSONL blocks v1", "all", "jsonl_blocks", "raw_jsonl", "lz4", "live", "c++", lz4Availability(), lz4AvailabilityReason(), "lz4", ".hfc", "jsonl_blocks,record_batches,streaming_decode,file_streaming,baseline,replay_ready,ranked_when_verified"},
+    {"std.brotli_jsonl_blocks_v1", "Brotli JSONL blocks v1", "all", "jsonl_blocks", "raw_jsonl", "brotli", "archive", "c++", brotliAvailability(), brotliAvailabilityReason(), "brotli", ".hfc", "jsonl_blocks,record_batches,streaming_decode,file_streaming,baseline,replay_ready,ranked_when_verified"},
+    {"std.xz_jsonl_blocks_v1", "XZ JSONL blocks v1", "all", "jsonl_blocks", "raw_jsonl", "xz", "archive", "c++", lzmaAvailability(), lzmaAvailabilityReason(), "xz", ".hfc", "jsonl_blocks,record_batches,streaming_decode,file_streaming,baseline,replay_ready,ranked_when_verified"},
+    {"std.gzip_jsonl_blocks_v1", "Gzip JSONL blocks v1", "all", "jsonl_blocks", "raw_jsonl", "gzip", "archive", "c++", zlibAvailability(), zlibAvailabilityReason(), "gzip", ".hfc", "jsonl_blocks,record_batches,streaming_decode,file_streaming,baseline,replay_ready,ranked_when_verified"},
     {"py.zstandard_jsonl_v1", "Python zstandard JSONL v1", "all", "jsonl_blocks", "raw_jsonl", "zstandard", "research", "python", PipelineAvailability::NotImplemented, "python lab runner is planned", "py-zstandard"},
     {"py.lz4_jsonl_v1", "Python lz4 JSONL v1", "all", "jsonl_blocks", "raw_jsonl", "lz4", "research", "python", PipelineAvailability::NotImplemented, "python lab runner is planned", "py-lz4"},
     {"py.lzma_jsonl_v1", "Python lzma JSONL v1", "all", "jsonl_blocks", "raw_jsonl", "lzma", "research", "python", PipelineAvailability::NotImplemented, "python lab runner is planned", "py-lzma"},
@@ -74,3 +139,5 @@ std::string_view pipelineAvailabilityToString(PipelineAvailability availability)
 }
 
 }  // namespace hft_compressor
+
+

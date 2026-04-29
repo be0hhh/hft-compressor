@@ -1,12 +1,14 @@
-﻿#include <cassert>
+#include <cassert>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <vector>
 
+#include "hft_compressor/c_api.h"
 #include "hft_compressor/compressor.hpp"
 #include "hft_compressor/metrics.hpp"
+#include "hft_compressor/replay_decode.hpp"
 
 namespace fs = std::filesystem;
 
@@ -22,6 +24,83 @@ void writeBytes(const fs::path& path, const std::vector<unsigned char>& bytes) {
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 }
 
+struct StandardCodecCase {
+    const char* pipelineId;
+    const char* outputSlug;
+    const char* formatId;
+};
+
+void runStandardCodecCase(const StandardCodecCase& codec, const fs::path& input, const fs::path& dir) {
+    const auto* pipeline = hft_compressor::findPipeline(codec.pipelineId);
+    assert(pipeline != nullptr);
+
+    hft_compressor::CompressionRequest request{};
+    request.inputPath = input;
+    request.outputRoot = dir / "standardCompressedData";
+    request.pipelineId = codec.pipelineId;
+    request.blockBytes = 16;
+
+    const auto result = hft_compressor::compress(request);
+    if (pipeline->availability == hft_compressor::PipelineAvailability::DependencyUnavailable) {
+        assert(result.status == hft_compressor::Status::DependencyUnavailable);
+        return;
+    }
+
+    assert(hft_compressor::isOk(result.status));
+    assert(result.pipelineId == codec.pipelineId);
+    assert(result.outputPath == request.outputRoot / codec.outputSlug / "sessions" / "hft_compressor_tests" / "trades.hfc");
+    assert(result.lineCount == 2u);
+    assert(result.blockCount >= 1u);
+    assert(result.roundtripOk);
+
+    hft_compressor::ReplayArtifactRequest artifactRequest{};
+    artifactRequest.compressedRoot = request.outputRoot;
+    artifactRequest.sessionDir = input.parent_path();
+    artifactRequest.streamType = hft_compressor::StreamType::Trades;
+    artifactRequest.preferredPipelineId = codec.pipelineId;
+    const auto artifact = hft_compressor::discoverReplayArtifact(artifactRequest);
+    assert(hft_compressor::isOk(artifact.status));
+    assert(artifact.found);
+    assert(artifact.path == result.outputPath);
+    assert(artifact.formatId == codec.formatId);
+    assert(artifact.pipelineId == codec.pipelineId);
+
+    std::string decoded;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayArtifactJsonl(artifact, [&decoded](std::span<const std::uint8_t> block) {
+        decoded.append(reinterpret_cast<const char*>(block.data()), block.size());
+        return true;
+    })));
+    assert(decoded == "[1,2,1,100]\n[2,3,0,200]\n");
+
+    hft_compressor::DecodeVerifyRequest verifyRequest{};
+    verifyRequest.compressedPath = result.outputPath;
+    verifyRequest.canonicalPath = input;
+    verifyRequest.pipelineId = codec.pipelineId;
+    verifyRequest.verifyMode = hft_compressor::VerifyMode::Both;
+    const auto verifyResult = hft_compressor::decodeAndVerify(verifyRequest);
+    assert(hft_compressor::isOk(verifyResult.status));
+    assert(verifyResult.verified);
+    assert(verifyResult.byteExact);
+    assert(verifyResult.recordExact);
+    assert(verifyResult.decodedRecordCount == 2u);
+
+    std::size_t tradeCount = 0;
+    hft_compressor::ReplayDecodeRequest decodeRequest{};
+    decodeRequest.artifact = artifactRequest;
+    decodeRequest.maxRecordsPerBatch = 1;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(decodeRequest, [&](const hft_compressor::ReplayRecordBatchV1& batch) {
+        tradeCount += batch.trades.size();
+        assert(batch.streamType == hft_compressor::StreamType::Trades);
+        return true;
+    })));
+    assert(tradeCount == 2u);
+}
+int countCRecords(const hftc_record_batch_v1* batch, void* userData) {
+    auto* count = static_cast<std::size_t*>(userData);
+    *count += batch->trade_count + batch->bookticker_count + batch->depth_count;
+    return 1;
+}
+
 }  // namespace
 
 int main() {
@@ -33,6 +112,7 @@ int main() {
     const auto pipelines = hft_compressor::listPipelines();
     assert(!pipelines.empty());
     assert(hft_compressor::findPipeline("std.zstd_jsonl_blocks_v1") != nullptr);
+    assert(hft_compressor::findPipeline("std.raw_jsonl_blocks_v1") != nullptr);
     assert(hft_compressor::findPipeline("custom.ac_bin16_ctx8_v1") != nullptr);
     assert(hft_compressor::findPipeline("missing.pipeline") == nullptr);
 
@@ -54,6 +134,64 @@ int main() {
     assert(placeholderResult.status == hft_compressor::Status::NotImplemented);
     assert(placeholderResult.pipelineId == "custom.ac_bin16_ctx8_v1");
     assert(!fs::exists(placeholder.outputRoot));
+
+    hft_compressor::CompressionRequest rawRequest{};
+    rawRequest.inputPath = input;
+    rawRequest.outputRoot = dir / "compressedData";
+    rawRequest.pipelineId = "std.raw_jsonl_blocks_v1";
+    rawRequest.blockBytes = 16;
+    const auto rawResult = hft_compressor::compress(rawRequest);
+    assert(hft_compressor::isOk(rawResult.status));
+    assert(rawResult.pipelineId == "std.raw_jsonl_blocks_v1");
+    assert(rawResult.entropy == "none");
+    assert(rawResult.outputPath == dir / "compressedData" / "raw-jsonl" / "sessions" / "hft_compressor_tests" / "trades.hfr");
+    assert(rawResult.lineCount == 2u);
+    assert(rawResult.blockCount >= 1u);
+
+    hft_compressor::ReplayArtifactRequest rawArtifactRequest{};
+    rawArtifactRequest.compressedRoot = rawRequest.outputRoot;
+    rawArtifactRequest.sessionDir = input.parent_path();
+    rawArtifactRequest.streamType = hft_compressor::StreamType::Trades;
+    rawArtifactRequest.preferredPipelineId = "std.raw_jsonl_blocks_v1";
+    const auto rawArtifact = hft_compressor::discoverReplayArtifact(rawArtifactRequest);
+    assert(hft_compressor::isOk(rawArtifact.status));
+    assert(rawArtifact.found);
+    assert(rawArtifact.path == rawResult.outputPath);
+    assert(rawArtifact.formatId == "hfr.raw_jsonl_blocks_v1");
+    assert(rawArtifact.pipelineId == "std.raw_jsonl_blocks_v1");
+
+    std::string decodedRawArtifact;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayArtifactJsonl(rawArtifact, [&decodedRawArtifact](std::span<const std::uint8_t> block) {
+        decodedRawArtifact.append(reinterpret_cast<const char*>(block.data()), block.size());
+        return true;
+    })));
+    assert(decodedRawArtifact == "[1,2,1,100]\n[2,3,0,200]\n");
+
+    std::size_t rawTradeCount = 0;
+    hft_compressor::ReplayDecodeRequest rawDecodeRequest{};
+    rawDecodeRequest.artifact = rawArtifactRequest;
+    rawDecodeRequest.maxRecordsPerBatch = 2;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(rawDecodeRequest, [&](const hft_compressor::ReplayRecordBatchV1& batch) {
+        rawTradeCount += batch.trades.size();
+        assert(batch.streamType == hft_compressor::StreamType::Trades);
+        return true;
+    })));
+    assert(rawTradeCount == 2u);
+
+    hft_compressor::DecodeVerifyRequest rawVerifyRequest{};
+    rawVerifyRequest.compressedPath = rawResult.outputPath;
+    rawVerifyRequest.canonicalPath = input;
+    rawVerifyRequest.pipelineId = "std.raw_jsonl_blocks_v1";
+    const auto rawVerifyResult = hft_compressor::decodeAndVerify(rawVerifyRequest);
+    assert(hft_compressor::isOk(rawVerifyResult.status));
+    assert(rawVerifyResult.byteExact);
+    assert(rawVerifyResult.recordExact);
+    assert(rawVerifyResult.decodedRecordCount == 2u);
+
+    runStandardCodecCase({"std.lz4_jsonl_blocks_v1", "lz4", "hfc.lz4_jsonl_blocks_v1"}, input, dir);
+    runStandardCodecCase({"std.brotli_jsonl_blocks_v1", "brotli", "hfc.brotli_jsonl_blocks_v1"}, input, dir);
+    runStandardCodecCase({"std.xz_jsonl_blocks_v1", "xz", "hfc.xz_jsonl_blocks_v1"}, input, dir);
+    runStandardCodecCase({"std.gzip_jsonl_blocks_v1", "gzip", "hfc.gzip_jsonl_blocks_v1"}, input, dir);
 
     hft_compressor::CompressionRequest request{};
     request.inputPath = input;
@@ -128,9 +266,49 @@ int main() {
         return true;
     })));
     assert(decodedReplayArtifact == decoded);
-    assert(hft_compressor::decodeReplayRecords(artifactRequest, [](const hft_compressor::ReplayRecord&) {
+
+    std::size_t batchCount = 0;
+    std::size_t tradeCount = 0;
+    hft_compressor::ReplayDecodeRequest decodeRequest{};
+    decodeRequest.artifact = artifactRequest;
+    decodeRequest.maxRecordsPerBatch = 1;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(decodeRequest, [&](const hft_compressor::ReplayRecordBatchV1& batch) {
+        ++batchCount;
+        tradeCount += batch.trades.size();
+        assert(batch.streamType == hft_compressor::StreamType::Trades);
+        assert(batch.bookTickers.empty());
+        assert(batch.depths.empty());
+        assert(batch.recordCount() == 1u);
         return true;
-    }) == hft_compressor::Status::NotImplemented);
+    })));
+    assert(batchCount == 2u);
+    assert(tradeCount == 2u);
+    assert(hft_compressor::decodeReplayRecordBatches(decodeRequest, [](const hft_compressor::ReplayRecordBatchV1&) {
+        return false;
+    }) == hft_compressor::Status::CallbackStopped);
+
+    std::size_t replayRecordCount = 0;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecords(artifactRequest, [&replayRecordCount](const hft_compressor::ReplayRecord& record) {
+        assert(record.kind == hft_compressor::ReplayRecordKind::Trade);
+        ++replayRecordCount;
+        return true;
+    })));
+    assert(replayRecordCount == 2u);
+
+    hftc_replay_decode_request cRequest{};
+    const auto cRoot = request.outputRoot.string();
+    const auto cSessionDir = input.parent_path().string();
+    cRequest.compressed_root = cRoot.c_str();
+    cRequest.session_dir = cSessionDir.c_str();
+    cRequest.stream_type = HFTC_STREAM_TRADES;
+    cRequest.artifact_preference = HFTC_ARTIFACT_CURRENT_BASELINE;
+    cRequest.max_records_per_batch = 4096u;
+    hftc_decoder* cDecoder = nullptr;
+    assert(hftc_decoder_open(&cRequest, &cDecoder) == HFTC_STATUS_OK);
+    std::size_t cRecordCount = 0;
+    assert(hftc_decoder_decode_all(cDecoder, countCRecords, &cRecordCount) == HFTC_STATUS_OK);
+    assert(cRecordCount == 2u);
+    hftc_decoder_close(cDecoder);
 
     artifactRequest.preferredPipelineId = "custom.rans_ctx8_v1";
     assert(hft_compressor::discoverReplayArtifact(artifactRequest).status == hft_compressor::Status::NotImplemented);
@@ -178,9 +356,35 @@ int main() {
     const auto verifyResult = hft_compressor::decodeAndVerify(verifyRequest);
     assert(hft_compressor::isOk(verifyResult.status));
     assert(verifyResult.verified);
+    assert(verifyResult.byteExact);
+    assert(verifyResult.recordExact);
     assert(verifyResult.decodedBytes == result.inputBytes);
     assert(verifyResult.canonicalBytes == result.inputBytes);
+    assert(verifyResult.decodedRecordCount == 2u);
+    assert(verifyResult.canonicalRecordCount == 2u);
+    assert(verifyResult.decodedByteHash == verifyResult.canonicalByteHash);
+    assert(verifyResult.decodedRecordHash == verifyResult.canonicalRecordHash);
+    assert(verifyResult.replayTimeSpanNs == 100u);
+    assert(verifyResult.estimatedReplayMultiplier > 0.0);
     assert(fs::exists(verifyResult.metricsPath));
+
+    const auto spacedCanonical = dir / "trades_spaced.jsonl";
+    writeFile(spacedCanonical, "[1, 2, 1, 100]\n[2, 3, 0, 200]\n");
+    verifyRequest.canonicalPath = spacedCanonical;
+    const auto spacedResult = hft_compressor::decodeAndVerify(verifyRequest);
+    assert(spacedResult.status == hft_compressor::Status::VerificationFailed);
+    assert(!spacedResult.byteExact);
+    assert(spacedResult.recordExact);
+    assert(spacedResult.firstMismatchField == "byte");
+
+    auto recordOnlyRequest = verifyRequest;
+    recordOnlyRequest.verifyBytes = false;
+    recordOnlyRequest.verifyMode = hft_compressor::VerifyMode::RecordExact;
+    const auto recordOnlyResult = hft_compressor::decodeAndVerify(recordOnlyRequest);
+    assert(hft_compressor::isOk(recordOnlyResult.status));
+    assert(recordOnlyResult.verified);
+    assert(!recordOnlyResult.byteExact);
+    assert(recordOnlyResult.recordExact);
 
     const auto changedCanonical = dir / "trades_changed.jsonl";
     writeFile(changedCanonical, "[1,2,1,100]\n[2,3,0,201]\n");
@@ -188,6 +392,9 @@ int main() {
     const auto mismatchResult = hft_compressor::decodeAndVerify(verifyRequest);
     assert(mismatchResult.status == hft_compressor::Status::VerificationFailed);
     assert(!mismatchResult.verified);
+    assert(!mismatchResult.recordExact);
+    assert(mismatchResult.firstMismatchLine == 2u);
+    assert(mismatchResult.firstMismatchField == "ts_ns");
     assert(mismatchResult.mismatchBytes > 0u);
     assert(mismatchResult.mismatchPercent > 0.0);
 
@@ -237,6 +444,20 @@ int main() {
     assert(depthArtifact.streamType == hft_compressor::StreamType::Depth);
     assert(depthArtifact.path == depthResult.outputPath);
 
+    std::size_t depthRecordCount = 0;
+    hft_compressor::ReplayDecodeRequest depthDecodeRequest{};
+    depthDecodeRequest.artifact = depthArtifactRequest;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(depthDecodeRequest, [&](const hft_compressor::ReplayRecordBatchV1& batch) {
+        assert(batch.streamType == hft_compressor::StreamType::Depth);
+        assert(batch.depths.size() == 1u);
+        assert(batch.depthLevels.size() == 2u);
+        assert(batch.depths.front().tsNs == 123);
+        assert(batch.depthLevels.front().priceE8 == 100);
+        depthRecordCount += batch.depths.size();
+        return true;
+    })));
+    assert(depthRecordCount == 1u);
+
     const auto oldDepthInput = dir / "old_depth" / "depth.jsonl";
     fs::create_directories(oldDepthInput.parent_path());
     writeFile(oldDepthInput, "[[[100,1,0,0]],[[101,2,1,0]],123]\n");
@@ -259,4 +480,5 @@ int main() {
 #endif
     return 0;
 }
+
 
