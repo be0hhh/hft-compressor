@@ -144,13 +144,13 @@ def compress_file(module: PythonCodecModule,
 
     encode_start = time.perf_counter_ns()
     compressed = module.compress_bytes(plain, level)
-    encode_ns = time.perf_counter_ns() - encode_start
     target.write_bytes(compressed)
+    encode_ns = time.perf_counter_ns() - encode_start
 
     decode_start = time.perf_counter_ns()
     decoded = module.decompress_bytes(compressed)
-    decode_ns = time.perf_counter_ns() - decode_start
     verify = verify_bytes(decoded, plain, stream, verify_mode)
+    decode_ns = time.perf_counter_ns() - decode_start
 
     metrics_path = target.with_suffix(target.suffix + ".metrics.json")
     result = {
@@ -190,9 +190,9 @@ def verify_file(module: PythonCodecModule,
     canonical = pathlib.Path(canonical_path)
     decode_start = time.perf_counter_ns()
     decoded = decode_file(module, artifact)
-    decode_ns = time.perf_counter_ns() - decode_start
     canonical_bytes = canonical.read_bytes()
     verify = verify_bytes(decoded, canonical_bytes, stream_name(canonical), verify_mode)
+    decode_ns = time.perf_counter_ns() - decode_start
     return {
         "status": "ok" if verify["ok"] else "verification_failed",
         "ok": verify["ok"],

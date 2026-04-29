@@ -701,20 +701,17 @@ DecodeVerifyResult decodeAndVerify(const DecodeVerifyRequest& request) noexcept 
             }
         }
         if (readBytes != block.size()) {
-            result.mismatchBytes += static_cast<std::uint64_t>(block.size() > readBytes ? block.size() - readBytes : readBytes - block.size());
             if (!firstMismatchRecorded) {
                 noteByteMismatch(blockStart + static_cast<std::uint64_t>(compared),
                                  {canonicalBlock.data(), readBytes},
                                  block,
                                  compared < readBytes ? compared : 0u);
             }
+            byteMatches = false;
         }
         if (result.mismatchBytes > 0u) byteMatches = false;
         return true;
     });
-    result.decodeCycles = timing::readCycles() - decodeStartCycles;
-    result.decodeNs = timing::nowNs() - decodeStartNs;
-
     if (verifyByteExact && result.decodedBytes < result.canonicalBytes) {
         std::vector<std::uint8_t> tail(64u * 1024u);
         while (canonicalBytes) {
@@ -761,6 +758,8 @@ DecodeVerifyResult decodeAndVerify(const DecodeVerifyRequest& request) noexcept 
         }
         byteMatches = false;
     }
+    result.decodeCycles = timing::readCycles() - decodeStartCycles;
+    result.decodeNs = timing::nowNs() - decodeStartNs;
     const auto denominator = std::max(result.decodedBytes, result.canonicalBytes);
     result.mismatchPercent = denominator == 0u ? 0.0 : (static_cast<double>(result.mismatchBytes) * 100.0) / static_cast<double>(denominator);
     result.byteExact = verifyByteExact && byteMatches && result.decodedBytes == result.canonicalBytes
