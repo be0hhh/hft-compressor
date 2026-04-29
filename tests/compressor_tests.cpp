@@ -30,6 +30,63 @@ struct StandardCodecCase {
     const char* formatId;
 };
 
+struct HftMacCase {
+    const char* pipelineId;
+    const char* inputName;
+    const char* jsonl;
+    const char* formatId;
+    const char* transform;
+    const char* entropy;
+    const char* outputSlug;
+    hft_compressor::StreamType streamType;
+};
+
+void runHftMacCase(const HftMacCase& codec, const fs::path& dir) {
+    const auto input = dir / codec.inputName;
+    writeFile(input, codec.jsonl);
+    hft_compressor::CompressionRequest request{};
+    request.inputPath = input;
+    request.outputRoot = dir / "hftmacCompressedData";
+    request.pipelineId = codec.pipelineId;
+    request.blockBytes = 16;
+
+    const auto result = hft_compressor::compress(request);
+    assert(hft_compressor::isOk(result.status));
+    assert(result.pipelineId == codec.pipelineId);
+    assert(result.transform == codec.transform);
+    assert(result.entropy == codec.entropy);
+    assert(result.roundtripOk);
+    assert(result.outputPath == request.outputRoot / codec.outputSlug / "sessions" / "hft_compressor_tests" / (std::string{codec.inputName}.substr(0, std::string{codec.inputName}.find('.')) + ".hfc"));
+
+    hft_compressor::ReplayArtifactRequest artifactRequest{};
+    artifactRequest.compressedRoot = request.outputRoot;
+    artifactRequest.sessionDir = input.parent_path();
+    artifactRequest.streamType = codec.streamType;
+    artifactRequest.preferredPipelineId = codec.pipelineId;
+    const auto artifact = hft_compressor::discoverReplayArtifact(artifactRequest);
+    assert(hft_compressor::isOk(artifact.status));
+    assert(artifact.found);
+    assert(artifact.formatId == codec.formatId);
+    assert(artifact.pipelineId == codec.pipelineId);
+
+    std::string decoded;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayArtifactJsonl(artifact, [&decoded](std::span<const std::uint8_t> block) {
+        decoded.append(reinterpret_cast<const char*>(block.data()), block.size());
+        return true;
+    })));
+    assert(decoded == codec.jsonl);
+
+    hft_compressor::DecodeVerifyRequest verifyRequest{};
+    verifyRequest.compressedPath = result.outputPath;
+    verifyRequest.canonicalPath = input;
+    verifyRequest.pipelineId = codec.pipelineId;
+    verifyRequest.verifyMode = hft_compressor::VerifyMode::Both;
+    const auto verifyResult = hft_compressor::decodeAndVerify(verifyRequest);
+    assert(hft_compressor::isOk(verifyResult.status));
+    assert(verifyResult.byteExact);
+    assert(verifyResult.recordExact);
+}
+
 void runStandardCodecCase(const StandardCodecCase& codec, const fs::path& input, const fs::path& dir) {
     const auto* pipeline = hft_compressor::findPipeline(codec.pipelineId);
     assert(pipeline != nullptr);
@@ -113,6 +170,13 @@ int main() {
     assert(!pipelines.empty());
     assert(hft_compressor::findPipeline("std.zstd_jsonl_blocks_v1") != nullptr);
     assert(hft_compressor::findPipeline("std.raw_jsonl_blocks_v1") != nullptr);
+    assert(hft_compressor::findPipeline("trade.hftmac_varint_v1") != nullptr);
+    assert(hft_compressor::findPipeline("bookticker.hftmac_varint_v1") != nullptr);
+    assert(hft_compressor::findPipeline("depth.hftmac_varint_v1") != nullptr);
+    assert(hft_compressor::findPipeline("trade.hftmac_raw_binary_v1") != nullptr);
+    assert(hft_compressor::findPipeline("bookticker.hftmac_raw_binary_v1") != nullptr);
+    assert(hft_compressor::findPipeline("depth.hftmac_raw_binary_v1") != nullptr);
+    assert(hft_compressor::findPipeline("trade.hftmac_ac16_ctx8_v1") != nullptr);
     assert(hft_compressor::findPipeline("custom.ac_bin16_ctx8_v1") != nullptr);
     assert(hft_compressor::findPipeline("missing.pipeline") == nullptr);
 
@@ -120,6 +184,22 @@ int main() {
     fs::create_directories(dir);
     const auto input = dir / "trades.jsonl";
     writeFile(input, "[1,2,1,100]\n[2,3,0,200]\n");
+
+    runHftMacCase({"trade.hftmac_varint_v1", "trades.jsonl", "[1,2,1,100]\n[2,3,0,200]\n", "hftmac.trade.varint.v1", "hftmac_varint", "none", "hftmac-varint", hft_compressor::StreamType::Trades}, dir);
+    runHftMacCase({"bookticker.hftmac_varint_v1", "bookticker.jsonl", "[1,2,3,4,100]\n[2,3,4,5,200]\n", "hftmac.bookticker.varint.v1", "hftmac_varint", "none", "hftmac-varint", hft_compressor::StreamType::BookTicker}, dir);
+    runHftMacCase({"depth.hftmac_varint_v1", "depth.jsonl", "[[100,1,0],[101,2,1],100]\n[[100,0,0],[102,3,1],200]\n", "hftmac.depth.varint.v1", "hftmac_varint", "none", "hftmac-varint", hft_compressor::StreamType::Depth}, dir);
+    runHftMacCase({"trade.hftmac_raw_binary_v1", "trades.jsonl", "[1,2,1,100]\n[2,3,0,200]\n", "hftmac.trade.raw_binary.v1", "hftmac_raw_binary", "none", "hftmac-raw-binary", hft_compressor::StreamType::Trades}, dir);
+    runHftMacCase({"bookticker.hftmac_raw_binary_v1", "bookticker.jsonl", "[1,2,3,4,100]\n[2,3,4,5,200]\n", "hftmac.bookticker.raw_binary.v1", "hftmac_raw_binary", "none", "hftmac-raw-binary", hft_compressor::StreamType::BookTicker}, dir);
+    runHftMacCase({"depth.hftmac_raw_binary_v1", "depth.jsonl", "[[100,1,0],[101,2,1],100]\n[[100,0,0],[102,3,1],200]\n", "hftmac.depth.raw_binary.v1", "hftmac_raw_binary", "none", "hftmac-raw-binary", hft_compressor::StreamType::Depth}, dir);
+
+    const auto spacedHftMacInput = dir / "hftmac_spaced" / "trades.jsonl";
+    fs::create_directories(spacedHftMacInput.parent_path());
+    writeFile(spacedHftMacInput, "[1, 2, 1, 100]\n");
+    hft_compressor::CompressionRequest spacedHftMacRequest{};
+    spacedHftMacRequest.inputPath = spacedHftMacInput;
+    spacedHftMacRequest.outputRoot = dir / "hftmac_spaced_out";
+    spacedHftMacRequest.pipelineId = "trade.hftmac_varint_v1";
+    assert(hft_compressor::compress(spacedHftMacRequest).status == hft_compressor::Status::CorruptData);
 
     hft_compressor::CompressionRequest missingPipeline{};
     missingPipeline.inputPath = input;
