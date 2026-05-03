@@ -1,0 +1,765 @@
+Нужно разработать и встроить в hft-compressor lossless replay-oriented codec для depth/orderbook update stream.
+
+Pipeline name:
+
+  hftmac.depth_ladder_offset_v1
+
+И дополнительно high-ratio variant:
+
+  hftmac.depth_ladder_offset_arith_static_v1
+
+Контекст:
+
+Depth/orderbook update stream логически состоит из batches:
+
+  depth batch:
+    timestamp_ns
+    levels:
+      price
+      qty
+      side
+
+Runtime layout может быть:
+
+  DepthBatch = 8 + 32 * level_count bytes
+
+Этот layout удобен для CPU/replay, но ужасен для storage/compression.
+Compressed layout должен хранить не 32-byte levels, а структуру изменения orderbook state.
+
+Главная идея:
+
+  price — это не просто int64 value.
+  price — это ключ в заранее известной price ladder / orderbook map.
+
+Поэтому depth updates нужно сжимать не как:
+
+  [price, qty, side]
+
+а как:
+
+  which ladder level changed -> new qty / delete
+
+То есть codec должен быть stateful.
+
+Decoder должен держать book state:
+
+  bid book: price_tick -> qty_lot
+  ask book: price_tick -> qty_lot
+
+И после каждого batch применять updates к этому state.
+
+Цель:
+
+  - 100% lossless восстановление исходных depth update batches
+  - быстрый streaming decode для replay/backtest
+  - binary artifact, не JSON
+  - не materialize весь decoded corpus
+  - decode chunk-by-chunk / batch-by-batch
+  - target: сильно меньше runtime 8 + 32*N
+  - потенциально 16x–32x относительно runtime depth layout
+
+1. Required state / snapshot
+
+Этот codec должен работать от initial orderbook snapshot/state.
+
+Нужно явно определить:
+
+  - snapshot входит в тот же artifact
+  - или snapshot хранится рядом и referenced by metadata
+  - или first depth chunk содержит initial state
+
+Для корректного decode decoder обязан иметь тот же initial book state, что и encoder.
+
+State:
+
+  current_best_bid
+  current_best_ask
+  bid_qty_by_price
+  ask_qty_by_price
+
+После каждого decoded batch state обновляется.
+
+2. Normalization
+
+Для каждого level:
+
+  price_tick = price / price_scale
+  qty_lot    = qty / qty_scale
+  ts_unit    = timestamp_ns / time_scale
+
+Типичные scale:
+
+  time_scale  = 1_000_000
+  price_scale = 1000
+  qty_scale   = 100_000_000
+
+Если значение не делится на scale без остатка:
+
+  - нельзя терять точность
+  - использовать fallback raw encoding
+  - lossless важнее ratio
+
+3. Timestamp model
+
+Depth timestamp обычно монотонный и batch-level.
+
+Для каждого batch:
+
+  dt = current_ts_unit - previous_ts_unit
+
+dt >= 0.
+
+Первый timestamp chunk-а хранить как base_ts_unit.
+
+Дальше хранить positive dt.
+
+Так как depth update intervals обычно маленькие, сделать fast path:
+
+  if dt < 128:
+    encode as one small symbol / one byte
+  else:
+    escape + varint(dt)
+
+В arithmetic variant dt stream можно кодировать как symbol stream, потому что dt часто повторяется.
+
+4. Side model
+
+Не хранить side на каждый level.
+
+В depth batches levels обычно идут side-runs:
+
+  bid bid bid ... ask ask ask ...
+
+Поэтому хранить:
+
+  bid_count
+  ask_count
+
+Для batch:
+
+  total_level_count = bid_count + ask_count
+
+Если batch только bid:
+
+  bid_count = N
+  ask_count = 0
+
+Если batch только ask:
+
+  bid_count = 0
+  ask_count = N
+
+Если появятся необычные interleaved side sequences, нужен fallback:
+
+  mode = side_runs
+  или mode = explicit_side_bits
+
+Но основной fast path:
+
+  side is represented by bid_count / ask_count
+
+Это убирает side почти полностью.
+
+5. Price model: offset from current spread
+
+Главная часть codec-а.
+
+Не хранить absolute price каждый раз.
+
+Перед применением текущего batch decoder знает:
+
+  current_best_bid
+  current_best_ask
+
+Для bid-side update:
+
+  bid_offset = current_best_bid - price_tick
+
+Для ask-side update:
+
+  ask_offset = price_tick - current_best_ask
+
+Пример:
+
+  current_best_bid = 81400
+  current_best_ask = 81410
+
+  bid price 81400 -> offset 0
+  bid price 81399 -> offset 1
+  bid price 81398 -> offset 2
+
+  ask price 81410 -> offset 0
+  ask price 81411 -> offset 1
+  ask price 81412 -> offset 2
+
+То есть price становится маленьким числом около spread-а.
+
+Важно:
+
+  offsets считать относительно best_bid/best_ask ДО применения текущего batch.
+
+Тогда encoder и decoder используют одинаковое состояние.
+
+6. Price order inside side
+
+Внутри bid side и ask side prices обычно отсортированы.
+
+Поэтому для каждой стороны хранить:
+
+  first_offset
+  positive gaps
+
+Например:
+
+  bid offsets:
+    0, 1, 3, 4
+
+  encoded:
+    first_offset = 0
+    gaps = 1, 2, 1
+
+Для ask:
+
+  ask offsets:
+    0, 2, 5
+
+  encoded:
+    first_offset = 0
+    gaps = 2, 3
+
+Payload per batch:
+
+  dt
+
+  bid_count
+  ask_count
+
+  if bid_count > 0:
+    bid_first_offset
+    bid_gaps[bid_count - 1]
+
+  if ask_count > 0:
+    ask_first_offset
+    ask_gaps[ask_count - 1]
+
+7. Fallback price model
+
+Если offset получается отрицательным или слишком странным, например update внутри spread и side cannot be inferred safely:
+
+  use fallback mode for that side/run/update
+
+Fallback variants:
+
+  A. absolute price_tick varint relative to chunk base price
+  B. price_index = price_tick - base_price_tick
+  C. signed delta from previous price in stream
+
+Metadata must say which price mode was used:
+
+  price_mode:
+    spread_offset_gaps
+    absolute_index
+    explicit_price_delta
+
+Lossless всегда важнее ratio.
+
+8. Optional price bitmap mode
+
+Для плотных price ranges можно добавить adaptive mode:
+
+  mode 0: first_offset + gaps
+  mode 1: window_start + bitmap
+
+Если offsets такие:
+
+  0,1,2,3,4,7,8,9
+
+то можно хранить:
+
+  window_start = 0
+  window_len = 10
+  bitmap = 1111100111
+
+Правило выбора:
+
+  if window_len <= 128 and density high:
+    use bitmap
+  else:
+    use gaps
+
+Это отдельное улучшение.
+Для первой версии достаточно offset + gaps.
+
+9. Delete model
+
+qty = 0 означает delete level.
+
+Не хранить qty=0 как обычный quantity.
+
+Для каждого level записать:
+
+  delete_bit = qty_lot == 0
+
+Если delete_bit = 1:
+
+  qty не записывать вообще
+
+Если delete_bit = 0:
+
+  записать qty code
+
+delete_bits stream:
+
+  one bit per level in original update order
+
+Пример:
+
+  qty:
+    10, 7, 0, 3, 0
+
+  delete_bits:
+    0 0 1 0 1
+
+  qty_values:
+    10, 7, 3
+
+10. Quantity model
+
+Qty — главный оставшийся вес.
+
+Базовый вариант:
+
+  non-zero qty_lot -> varint
+
+Улучшенный вариант:
+
+  hot_qty_table per chunk
+
+Header chunk-а содержит:
+
+  hot_qty_table[0..N-1]
+
+Проверить N:
+
+  16
+  32
+  64
+  128
+
+Encoding:
+
+  if qty_lot exists in hot_qty_table:
+    write HOT marker + hot index
+  else:
+    write ESCAPE marker + varint(qty_lot)
+
+Так как qty=0 уже вынесен в delete_bit, hot table строить только по non-zero qty.
+
+Дополнительно проверить раздельные таблицы:
+
+  bid_hot_qty_table
+  ask_hot_qty_table
+
+Потому что bid и ask quantity distributions могут отличаться.
+
+11. Stateful quantity delta optional
+
+Так как decoder держит current book state, можно попробовать кодировать quantity не только как absolute new qty, но и как delta от старого значения на этом price level:
+
+  old_qty = book[side][price_tick]
+  new_qty = update.qty_lot
+  dqty = new_qty - old_qty
+
+Проверить два режима:
+
+  qty_mode_abs:
+    encode new_qty through hot table / varint
+
+  qty_mode_delta:
+    encode ZigZag(dqty)
+
+Encoder может выбрать лучший mode per chunk или per stream.
+
+Для первой версии:
+
+  delete_bit + hot_qty_table
+
+Для исследовательской версии:
+
+  compare absolute qty vs delta-from-state qty
+
+12. Core payload structure
+
+Batch format conceptually:
+
+  batch:
+    dt
+
+    bid_count
+    ask_count
+
+    bid prices:
+      bid_first_offset
+      bid_price_gaps[]
+
+    ask prices:
+      ask_first_offset
+      ask_price_gaps[]
+
+    delete_bits for all levels
+
+    qty_codes for non-delete levels
+
+Decoder reconstructs original update order:
+
+  all bid updates first
+  then all ask updates
+
+or uses metadata if original order differs.
+
+13. Internal columnar streams
+
+Не писать everything object-by-object.
+
+Хранить internal streams:
+
+  batch_stream:
+    dt
+    bid_count
+    ask_count
+
+  bid_price_stream:
+    bid_first_offsets
+    bid_gaps
+
+  ask_price_stream:
+    ask_first_offsets
+    ask_gaps
+
+  delete_bit_stream:
+    one bit per level
+
+  qty_code_stream:
+    hot indexes / escape markers
+
+  qty_escape_stream:
+    raw qty_lot varints
+
+  fallback_price_stream:
+    only for fallback prices
+
+  optional:
+    qty_delta_stream
+    price_mode_stream
+
+Columnar layout нужен для:
+
+  - better compression
+  - arithmetic coding
+  - stats
+  - debug inspect
+
+14. Decode algorithm
+
+Decoder:
+
+  load initial snapshot / initial state
+
+  for each chunk:
+    read header
+    read streams
+
+    for each batch:
+      ts_unit += dt
+
+      reconstruct bid prices:
+        offset = bid_first_offset
+        price_tick = current_best_bid - offset
+        then apply gaps
+
+      reconstruct ask prices:
+        offset = ask_first_offset
+        price_tick = current_best_ask + offset
+        then apply gaps
+
+      for each reconstructed level:
+        read delete_bit
+
+        if delete_bit:
+          qty_lot = 0
+          remove level from book state
+        else:
+          decode qty_lot
+          set book[side][price_tick] = qty_lot
+
+        emit original depth update:
+          price = price_tick * price_scale
+          qty = qty_lot * qty_scale
+          side = side
+
+      after applying batch:
+        update current_best_bid/current_best_ask from book state
+
+  emit decoded depth batches streaming
+
+Important:
+
+  best_bid/best_ask used for offset decoding are the values BEFORE applying current batch.
+
+15. Verification
+
+Hard verification required:
+
+  encode depth.jsonl
+  decode artifact
+  compare decoded canonical depth batches with original
+
+Check:
+
+  batch_count match
+  total_level_count match
+  first_ts/last_ts match
+  per-batch timestamp match
+  every level update matches:
+    price
+    qty
+    side
+  original order matches
+  checksum per chunk
+  total checksum
+
+16. Inspect/debug views
+
+Add inspect modes.
+
+A. canonical-json
+
+Show decoded original canonical depth format:
+
+  [
+    [[price, qty, side], [price, qty, side], ..., timestamp_ns],
+    ...
+  ]
+
+B. canonical-binary
+
+Show runtime/canonical binary batches:
+
+  batch_index
+  ts_ns
+  level_count
+  binary_offset
+  raw_bytes_hex
+  levels:
+    index
+    price
+    qty
+    side
+
+C. encoded-json
+
+Show internal representation:
+
+  {
+    "header": {
+      "pipeline_id": "hftmac.depth_ladder_offset_v1",
+      "batch_count": 2,
+      "total_level_count": 8,
+      "base_ts_unit": 1000,
+      "time_scale": 1000000,
+      "price_scale": 1000,
+      "qty_scale": 100000000,
+      "hot_qty_table": [7, 31, 14, 10]
+    },
+    "batches": [
+      {
+        "dt": 52,
+        "best_before": {
+          "bid": 81400,
+          "ask": 81410
+        },
+        "bid_count": 3,
+        "ask_count": 2,
+        "bid_price_encoding": {
+          "first_offset": 0,
+          "gaps": [1, 2],
+          "prices": [81400, 81399, 81397]
+        },
+        "ask_price_encoding": {
+          "first_offset": 0,
+          "gaps": [2],
+          "prices": [81410, 81412]
+        },
+        "delete_bits": "00101",
+        "qty_codes": [3, 0, 2],
+        "qty_values": [10, 7, 14]
+      }
+    ]
+  }
+
+D. encoded-binary
+
+Show hex/bit-level dump:
+
+  chunk header bytes
+  batch stream bytes
+  bid price stream bytes
+  ask price stream bytes
+  delete bit stream bytes
+  qty code stream bytes
+  qty escape stream bytes
+  fallback stream bytes
+  checksum bytes
+
+E. stats
+
+Show:
+
+  pipeline_id
+  batch_count
+  total_level_count
+
+  raw_runtime_bytes = batch_count * 8 + total_level_count * 32
+  encoded_bytes
+  compression_ratio
+  bytes_per_batch
+  bytes_per_level
+
+  avg_levels_per_batch
+  avg_bid_count
+  avg_ask_count
+
+  dt histogram
+  bid_count/ask_count histogram
+  price gap histogram
+  first offset histogram
+  delete rate
+  hot_qty_hit_rate
+  qty_escape_count
+
+  stream sizes:
+    header_bytes
+    batch_stream_bytes
+    bid_price_stream_bytes
+    ask_price_stream_bytes
+    delete_bit_stream_bytes
+    qty_code_stream_bytes
+    qty_escape_stream_bytes
+    fallback_stream_bytes
+    checksum_bytes
+
+  encode_MBps
+  decode_MBps
+  checksum_status
+
+17. Benchmark matrix
+
+Compare:
+
+  A. current std.zstd_jsonl_blocks_v1
+  B. raw runtime binary:
+       8 + 32 * level_count
+  C. raw binary + zstd
+  D. simple depth delta:
+       dt + side runs + first price + price gaps + delete bits + qty varint
+  E. hftmac.depth_ladder_offset_v1:
+       dt + bid_count/ask_count + offsets from best bid/ask + gaps + delete bits + hot qty
+  F. hftmac.depth_ladder_offset_v1 with price bitmap mode
+  G. hftmac.depth_ladder_offset_arith_static_v1
+
+Output:
+
+  original_jsonl_bytes
+  raw_runtime_bytes
+  encoded_bytes
+  ratio_vs_jsonl
+  ratio_vs_runtime_binary
+  bytes_per_level
+  bytes_per_batch
+  encode_MBps
+  decode_MBps
+  checksum_status
+  stream breakdown
+
+18. Arithmetic coding variant
+
+Add second pipeline:
+
+  hftmac.depth_ladder_offset_arith_static_v1
+
+It must use the same transform as hftmac.depth_ladder_offset_v1.
+
+Difference:
+
+  selected internal streams are encoded with static arithmetic coding per chunk.
+
+Do not apply arithmetic coding to raw 32-byte level records.
+
+Correct order:
+
+  depth batches
+    -> normalize
+    -> stateful book model
+    -> best bid/ask offsets
+    -> side counts
+    -> price gaps
+    -> delete bits
+    -> qty hot codes
+    -> internal symbol streams
+    -> arithmetic coding
+
+Good streams for arithmetic coding:
+
+  - dt stream
+  - bid_count / ask_count stream
+  - first offset stream
+  - price gap stream
+  - delete bit stream
+  - qty hot code stream
+  - price mode stream
+  - qty mode stream
+
+Arithmetic coding should be optional per stream.
+
+For each stream encoder can choose:
+
+  raw_varint
+  bitpack
+  arithmetic_static
+
+If frequency table overhead is bigger than gain, keep raw/bitpack.
+
+Entropy metadata per stream:
+
+  stream_name
+  encoding
+  symbol_count
+  alphabet_size
+  top_symbols
+  raw_bits_estimate
+  encoded_bits
+  frequency_table_bytes
+  net_gain_bytes
+
+This variant is high-ratio research profile.
+Non-arithmetic depth_ladder_offset_v1 is fast replay profile.
+
+Main hypothesis:
+
+  Runtime depth layout:
+    8 + 32 * level_count bytes
+
+  Compressed depth layout:
+    dt
+    bid_count / ask_count
+    price offsets/gaps
+    delete bits
+    qty codes
+
+  Price is compressed because it becomes offset from current spread.
+  Side is compressed because it becomes counts/runs.
+  Qty=0 is compressed because it becomes delete bit.
+  Non-zero qty is compressed through hot table / optional arithmetic.
+
+  Expected target:
+    32 bytes/level -> roughly 1.5–4 bytes/level depending on data and entropy stage.

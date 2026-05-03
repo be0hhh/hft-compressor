@@ -137,19 +137,29 @@ def compress_file(module: PythonCodecModule,
                   verify_mode: VerifyMode = "both") -> dict[str, Any]:
     source = pathlib.Path(input_path)
     root = pathlib.Path(output_root)
+    read_start = time.perf_counter_ns()
     plain = source.read_bytes()
+    read_ns = time.perf_counter_ns() - read_start
     stream = stream_name(source)
     target = output_path_for(source, root, module.descriptor)
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    encode_start = time.perf_counter_ns()
+    encode_total_start = time.perf_counter_ns()
+    encode_core_start = time.perf_counter_ns()
     compressed = module.compress_bytes(plain, level)
+    encode_core_ns = time.perf_counter_ns() - encode_core_start
+    write_start = time.perf_counter_ns()
     target.write_bytes(compressed)
-    encode_ns = time.perf_counter_ns() - encode_start
+    write_ns = time.perf_counter_ns() - write_start
+    encode_ns = time.perf_counter_ns() - encode_total_start
 
     decode_start = time.perf_counter_ns()
+    decode_core_start = time.perf_counter_ns()
     decoded = module.decompress_bytes(compressed)
+    decode_core_ns = time.perf_counter_ns() - decode_core_start
+    verify_start = time.perf_counter_ns()
     verify = verify_bytes(decoded, plain, stream, verify_mode)
+    verify_ns = time.perf_counter_ns() - verify_start
     decode_ns = time.perf_counter_ns() - decode_start
 
     metrics_path = target.with_suffix(target.suffix + ".metrics.json")
@@ -168,8 +178,13 @@ def compress_file(module: PythonCodecModule,
         "input_bytes": len(plain),
         "output_bytes": len(compressed),
         "ratio": (len(plain) / len(compressed)) if compressed else 0.0,
+        "read_ns": read_ns,
         "encode_ns": encode_ns,
         "decode_ns": decode_ns,
+        "encode_core_ns": encode_core_ns,
+        "write_ns": write_ns,
+        "decode_core_ns": decode_core_ns,
+        "verify_ns": verify_ns,
         "verify_mode": verify_mode,
         **verify,
     }

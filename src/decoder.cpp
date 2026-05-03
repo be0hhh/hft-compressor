@@ -12,6 +12,10 @@
 #include "common/CompressionInternals.hpp"
 #include "common/timing.hpp"
 #include "container/hfc/format.hpp"
+#include "codecs/bookticker_delta_mask/BookTickerDeltaMask.hpp"
+#include "codecs/depth_ladder_offset/DepthLadderOffset.hpp"
+#include "codecs/depth_ladder_offset/DepthLadderOffsetV2.hpp"
+#include "codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.hpp"
 #include "hft_compressor/replay_decode.hpp"
 #include "pipelines/PipelineBackend.hpp"
 
@@ -476,6 +480,46 @@ Status decodeReplayJsonl(const ReplayArtifactRequest& request,
     if (!isOk(artifact.status)) return artifact.status;
     if (!artifact.found) return Status::IoError;
     return decodeReplayArtifactJsonl(artifact, onBlock);
+}
+
+Status inspectCompressedArtifact(const std::filesystem::path& path,
+                                 std::string_view pipelineId,
+                                 std::string_view view,
+                                 const DecodedBlockCallback& onBlock) noexcept {
+    if (path.empty() || pipelineId.empty() || view.empty() || !onBlock) return Status::InvalidArgument;
+    if (pipelineId == "hftmac.trades_grouped_delta_qtydict_math_v3") {
+        if (view == "canonical-json" || view == "canonical-jsonl") {
+            return codecs::trades_grouped_delta_qtydict::decodeFile(path, onBlock);
+        }
+        if (view == "encoded-json") {
+            return codecs::trades_grouped_delta_qtydict::inspectEncodedJsonFile(path, onBlock);
+        }
+        if (view == "encoded-binary") {
+            return codecs::trades_grouped_delta_qtydict::inspectEncodedBinaryFile(path, onBlock);
+        }
+        if (view == "stats") {
+            return codecs::trades_grouped_delta_qtydict::inspectStatsJsonFile(path, onBlock);
+        }
+    }
+    if (pipelineId == "hftmac.bookticker_delta_mask_v1") {
+        if (view == "canonical-json" || view == "canonical-jsonl") return codecs::bookticker_delta_mask::decodeFile(path, onBlock);
+        if (view == "encoded-json") return codecs::bookticker_delta_mask::inspectEncodedJsonFile(path, onBlock);
+        if (view == "encoded-binary") return codecs::bookticker_delta_mask::inspectEncodedBinaryFile(path, onBlock);
+        if (view == "stats") return codecs::bookticker_delta_mask::inspectStatsJsonFile(path, onBlock);
+    }
+    if (pipelineId == "hftmac.depth_ladder_offset_v1") {
+        if (view == "canonical-json" || view == "canonical-jsonl") return codecs::depth_ladder_offset::decodeFile(path, onBlock);
+        if (view == "encoded-json") return codecs::depth_ladder_offset::inspectEncodedJsonFile(path, onBlock);
+        if (view == "encoded-binary") return codecs::depth_ladder_offset::inspectEncodedBinaryFile(path, onBlock);
+        if (view == "stats") return codecs::depth_ladder_offset::inspectStatsJsonFile(path, onBlock);
+    }
+    if (pipelineId == "hftmac.depth_ladder_offset_v2") {
+        if (view == "canonical-json" || view == "canonical-jsonl") return codecs::depth_ladder_offset_v2::decodeFile(path, onBlock);
+        if (view == "encoded-json") return codecs::depth_ladder_offset_v2::inspectEncodedJsonFile(path, onBlock);
+        if (view == "encoded-binary") return codecs::depth_ladder_offset_v2::inspectEncodedBinaryFile(path, onBlock);
+        if (view == "stats") return codecs::depth_ladder_offset_v2::inspectStatsJsonFile(path, onBlock);
+    }
+    return Status::NotImplemented;
 }
 
 Status decodeReplayRecords(const ReplayArtifactRequest& request,

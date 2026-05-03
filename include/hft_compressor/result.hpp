@@ -29,6 +29,12 @@ struct CompressionResult {
     std::uint64_t blockCount{0};
     std::uint64_t encodeNs{0};
     std::uint64_t decodeNs{0};
+    std::uint64_t readNs{0};
+    std::uint64_t parseNs{0};
+    std::uint64_t encodeCoreNs{0};
+    std::uint64_t writeNs{0};
+    std::uint64_t decodeCoreNs{0};
+    std::uint64_t verifyNs{0};
     std::uint64_t encodeCycles{0};
     std::uint64_t decodeCycles{0};
     bool roundtripOk{false};

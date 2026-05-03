@@ -1,0 +1,761 @@
+Нужно разработать и встроить в hft-compressor два lossless replay-oriented codec-а для bookticker stream:
+
+  1. hftmac.bookticker_delta_mask_v1
+  2. hftmac.bookticker_delta_mask_arith_static_v1
+
+Оба codec-а должны использовать одинаковую domain transform representation.
+Разница между ними только в entropy stage:
+
+  - bookticker_delta_mask_v1:
+      base state + timestamp delta + change mask + ZigZag varint streams
+
+  - bookticker_delta_mask_arith_static_v1:
+      тот же самый transform, но selected internal streams дополнительно сжимаются static arithmetic coding per chunk
+
+Контекст:
+
+hft-recorder сейчас использует canonical session data вроде:
+
+  bookticker.jsonl
+  trades.jsonl
+  depth.jsonl
+
+hft-compressor является отдельным standalone compression core и должен подключаться к recorder через public API / shared library.
+Recorder не должен знать внутренний layout codec-а.
+Replay/backtest должен получать decoded typed batches через публичный decode/discovery API, а не руками читать container internals.
+
+BookTicker semantic model:
+
+  BookTicker = {
+    ts_ns,
+    bid_price,
+    bid_qty,
+    ask_price,
+    ask_qty
+  }
+
+Runtime layout занимает примерно 40 bytes/object:
+
+  ts_ns      : 8 bytes
+  bid_price  : 8 bytes
+  bid_qty    : 8 bytes
+  ask_price  : 8 bytes
+  ask_qty    : 8 bytes
+
+Runtime layout оптимизирован под CPU/replay.
+Compressed layout должен быть другим: он должен хранить не полные абсолютные поля каждого объекта, а изменения состояния best bid/ask.
+
+Главная идея:
+
+  BookTicker compress as:
+
+    base state
+    + timestamp deltas / timestamp groups
+    + bid + spread instead of bid + ask
+    + change masks
+    + only changed field deltas
+    + ZigZag for signed deltas
+    + optional arithmetic coding over internal streams
+
+Target:
+
+  - 100% lossless восстановление исходных bookticker records
+  - быстрый streaming decode для replay/backtest
+  - binary artifact, не JSON
+  - target average compressed size: 2–4 bytes per bookticker object
+  - compare against:
+      JSONL baseline
+      raw binary 40 bytes/object
+      raw binary + zstd
+      delta-mask codec without arithmetic
+      delta-mask codec with arithmetic coding
+
+Важно понимать:
+
+  JSON -> raw binary уже уменьшает размер, потому что JSON хранит текстовые цифры,
+  скобки, запятые и переносы строк.
+
+  Но raw binary всё равно хранит полные 5 полей по 8 bytes.
+
+  Главный выигрыш должен прийти не от "просто binary",
+  а от specialized compressed binary representation:
+
+    full object:
+      ts, bid, bid_qty, ask, ask_qty
+
+    compressed update:
+      dt, mask, only changed deltas
+
+1. Pipeline names
+
+Добавить два pipeline-а:
+
+  hftmac.bookticker_delta_mask_v1
+
+  hftmac.bookticker_delta_mask_arith_static_v1
+
+Они должны быть видны в pipeline registry / list-pipelines.
+
+2. Chunking
+
+Разбить bookticker stream на chunks.
+
+Проверить несколько размеров chunk-а:
+
+  4K records
+  16K records
+  32K records
+  64K records
+
+В header каждого chunk хранить:
+
+  magic
+  version
+  pipeline_id
+  stream_type = bookticker
+
+  record_count
+  first_ts_ns
+  last_ts_ns
+
+  time_scale
+  price_scale
+  qty_scale
+
+  base_ts_unit
+  base_bid_tick
+  base_spread_tick
+  base_bid_qty_lot
+  base_ask_qty_lot
+
+  checksum/hash
+  internal stream sizes
+  optional entropy metadata
+
+3. Normalization
+
+Для каждого bookticker record вычислять:
+
+  ts_unit     = ts_ns / time_scale
+  bid_tick    = bid_price / price_scale
+  ask_tick    = ask_price / price_scale
+  spread_tick = ask_tick - bid_tick
+
+  bid_qty_lot = bid_qty / qty_scale
+  ask_qty_lot = ask_qty / qty_scale
+
+Проверить типичные scale:
+
+  time_scale  = 1_000_000
+  price_scale = 1000
+  qty_scale   = 100_000_000
+
+Если значение не делится на scale без остатка:
+
+  - нельзя терять точность
+  - использовать fallback raw encoding для конкретного значения или всего chunk-а
+  - lossless важнее compression ratio
+
+4. Base state
+
+Первое состояние chunk-а хранить полностью:
+
+  base_ts_unit
+  base_bid_tick
+  base_spread_tick
+  base_bid_qty_lot
+  base_ask_qty_lot
+
+Декодер должен восстановить начальное состояние:
+
+  current_ts_unit     = base_ts_unit
+  current_bid_tick    = base_bid_tick
+  current_spread_tick = base_spread_tick
+  current_bid_qty_lot = base_bid_qty_lot
+  current_ask_qty_lot = base_ask_qty_lot
+
+ask_tick не хранить отдельно.
+
+Восстановление:
+
+  ask_tick = bid_tick + spread_tick
+
+5. Timestamp model
+
+Timestamp монотонный.
+
+Для каждого следующего record:
+
+  dt = current_ts_unit - previous_ts_unit
+
+dt должен быть >= 0.
+
+Первый timestamp хранится в header.
+Дальше хранить только positive dt.
+
+Так как у bookticker timestamp иногда повторяется, поддержать timestamp groups:
+
+  timestamp_group:
+    dt_from_previous_timestamp
+    update_count
+
+Но для bookticker timestamp grouping не главный источник выигрыша.
+Главный источник выигрыша — change_mask.
+
+6. State delta model
+
+Для каждого update вычислять дельты относительно предыдущего состояния:
+
+  dbid       = bid_tick - previous_bid_tick
+  dspread    = spread_tick - previous_spread_tick
+  dbid_qty   = bid_qty_lot - previous_bid_qty_lot
+  dask_qty   = ask_qty_lot - previous_ask_qty_lot
+
+Все signed deltas кодировать через ZigZag:
+
+   0 -> 0
+  -1 -> 1
+  +1 -> 2
+  -2 -> 3
+  +2 -> 4
+
+Formula:
+
+  zigzag(x):
+    if x >= 0: 2 * x
+    if x < 0: -2 * x - 1
+
+unzigzag должен точно восстанавливать signed delta.
+
+7. Change mask
+
+На каждый update хранить change_mask.
+
+Mask bits:
+
+  bit 0: bid_tick changed
+  bit 1: spread_tick changed
+  bit 2: bid_qty_lot changed
+  bit 3: ask_qty_lot changed
+
+Если поле не изменилось, его delta вообще не записывать.
+
+Пример:
+
+  previous:
+    bid_tick        = 81400
+    spread_tick     = 10
+    bid_qty_lot     = 46
+    ask_qty_lot     = 14
+
+  current:
+    bid_tick        = 81400
+    spread_tick     = 10
+    bid_qty_lot     = 44
+    ask_qty_lot     = 14
+
+  encoded:
+    dt = 1
+    mask = 0100
+    dbid_qty = zigzag(-2)
+
+Нельзя писать нулевые deltas как varint.
+Нули должны исчезать через mask.
+
+8. Payload format для bookticker_delta_mask_v1
+
+Базовый формат без arithmetic coding:
+
+  chunk header:
+    base_ts_unit
+    base_bid_tick
+    base_spread_tick
+    base_bid_qty_lot
+    base_ask_qty_lot
+
+  for each timestamp group:
+    dt_from_previous_timestamp
+    update_count
+
+    for each update:
+      change_mask
+
+      if mask.bit0:
+        write varint(zigzag(dbid))
+
+      if mask.bit1:
+        write varint(zigzag(dspread))
+
+      if mask.bit2:
+        write varint(zigzag(dbid_qty))
+
+      if mask.bit3:
+        write varint(zigzag(dask_qty))
+
+Этот codec должен быть fast replay profile.
+
+Цель:
+
+  показать, сколько compression ratio даёт сама domain transform:
+    JSON/raw binary -> base state + dt + mask + changed deltas only
+
+9. Internal streams
+
+Внутренне лучше хранить не object-by-object, а columnar streams:
+
+  timestamp_stream:
+    dt
+    update_count
+
+  mask_stream:
+    change_mask per update
+
+  bid_delta_stream:
+    zigzag(dbid) only when bid changed
+
+  spread_delta_stream:
+    zigzag(dspread) only when spread changed
+
+  bid_qty_delta_stream:
+    zigzag(dbid_qty) only when bid_qty changed
+
+  ask_qty_delta_stream:
+    zigzag(dask_qty) only when ask_qty changed
+
+Columnar streams нужны потому что каждый stream имеет свою статистику:
+
+  - mask_stream имеет только 16 возможных значений
+  - timestamp dt обычно маленький
+  - price/spread deltas часто маленькие
+  - qty deltas часто имеют повторяющиеся паттерны
+
+Это полезно для zstd, arithmetic coding, rANS и debug/stats.
+
+10. Payload format для bookticker_delta_mask_arith_static_v1
+
+Этот codec использует тот же transform, что и bookticker_delta_mask_v1.
+
+Отличие:
+
+  selected internal streams кодируются static arithmetic coding per chunk.
+
+Для каждого stream encoder должен:
+
+  1. собрать symbols внутри chunk-а
+  2. построить frequency table
+  3. записать frequency table в chunk entropy metadata
+  4. arithmetic-encode stream
+  5. сохранить encoded bitstream
+
+Decoder должен:
+
+  1. прочитать frequency table
+  2. восстановить exact symbol stream
+  3. применить тот же delta-mask decoder
+
+Arithmetic coding применять к stream-ам:
+
+  - mask_stream
+  - timestamp dt stream
+  - update_count stream
+  - bid_delta_zigzag_stream
+  - spread_delta_zigzag_stream
+  - bid_qty_delta_zigzag_stream
+  - ask_qty_delta_zigzag_stream
+
+Arithmetic coding должен быть optional per stream.
+
+Encoder должен уметь выбрать для каждого stream:
+
+  - raw_varint
+  - bitpack
+  - arithmetic_static
+
+Если stream слишком маленький или frequency table overhead больше выигрыша,
+его можно оставить raw_varint / bitpack.
+
+В metadata для каждого stream хранить выбранный encoding.
+
+Example metadata:
+
+  {
+    "stream": "mask_stream",
+    "encoding": "arithmetic_static",
+    "symbol_count": 85090,
+    "alphabet_size": 16,
+    "raw_bits_estimate": 680720,
+    "encoded_bits": 112300,
+    "frequency_table_bytes": 64
+  }
+
+Этот codec должен быть high-ratio research profile.
+
+Важно:
+
+  arithmetic coding не должен применяться к raw BookTickerRuntimeV1 bytes напрямую.
+
+Правильный порядок:
+
+  bookticker records
+    -> normalize
+    -> base state
+    -> bid + spread
+    -> dt
+    -> change mask
+    -> ZigZag deltas
+    -> internal symbol streams
+    -> arithmetic coding
+
+11. Decode
+
+Decoder должен работать streaming chunk-by-chunk.
+
+Algorithm:
+
+  read chunk header
+
+  initialize state:
+    ts_unit     = base_ts_unit
+    bid_tick    = base_bid_tick
+    spread_tick = base_spread_tick
+    bid_qty_lot = base_bid_qty_lot
+    ask_qty_lot = base_ask_qty_lot
+
+  for each timestamp group:
+    ts_unit += dt_from_previous_timestamp
+
+    for each update in group:
+      read change_mask
+
+      if bit0:
+        bid_tick += unzigzag(next bid_delta)
+
+      if bit1:
+        spread_tick += unzigzag(next spread_delta)
+
+      if bit2:
+        bid_qty_lot += unzigzag(next bid_qty_delta)
+
+      if bit3:
+        ask_qty_lot += unzigzag(next ask_qty_delta)
+
+      ask_tick = bid_tick + spread_tick
+
+      reconstruct:
+        ts_ns     = ts_unit * time_scale
+        bid_price = bid_tick * price_scale
+        ask_price = ask_tick * price_scale
+        bid_qty   = bid_qty_lot * qty_scale
+        ask_qty   = ask_qty_lot * qty_scale
+
+      emit neutral typed bookticker record
+
+Decode must not materialize the whole decoded corpus.
+It must emit decoded batches.
+
+12. Lossless verification
+
+Добавить hard verification:
+
+  encode input bookticker.jsonl
+  decode artifact
+  compare decoded canonical records with original canonical records
+
+Проверять:
+
+  record_count match
+  first_ts_ns match
+  last_ts_ns match
+  per-chunk checksum
+  total checksum
+  semantic equality 100%
+
+Decoded record должен полностью совпадать с исходным record:
+
+  ts_ns
+  bid_price
+  bid_qty
+  ask_price
+  ask_qty
+
+13. Inspect/debug modes
+
+Добавить inspect modes, чтобы можно было глазами понять codec.
+
+A. canonical-json
+
+Показывает decoded bookticker records как обычный canonical JSON:
+
+  [
+    [bid_price, bid_qty, ask_price, ask_qty, ts_ns],
+    ...
+  ]
+
+Порядок полей должен соответствовать текущему canonical bookticker.jsonl формату в проекте.
+
+B. canonical-binary
+
+Показывает runtime/canonical binary records:
+
+  record_index
+  ts_ns
+  bid_price
+  bid_qty
+  ask_price
+  ask_qty
+  binary_offset
+  raw_bytes_hex
+
+C. encoded-json
+
+Показывает внутреннее encoded-представление codec-а:
+
+  {
+    "header": {
+      "pipeline_id": "hftmac.bookticker_delta_mask_v1",
+      "record_count": 4,
+      "base_ts_unit": 1000,
+      "base_bid_tick": 81400,
+      "base_spread_tick": 10,
+      "base_bid_qty_lot": 46,
+      "base_ask_qty_lot": 14,
+      "time_scale": 1000000,
+      "price_scale": 1000,
+      "qty_scale": 100000000
+    },
+    "groups": [
+      {
+        "dt": 0,
+        "update_count": 2,
+        "updates": [
+          {
+            "mask": "0100",
+            "changed": {
+              "bid_qty_delta": -2
+            },
+            "state_after": {
+              "bid_tick": 81400,
+              "spread_tick": 10,
+              "bid_qty_lot": 44,
+              "ask_qty_lot": 14
+            }
+          },
+          {
+            "mask": "1001",
+            "changed": {
+              "bid_delta": 1,
+              "ask_qty_delta": 6
+            },
+            "state_after": {
+              "bid_tick": 81401,
+              "spread_tick": 10,
+              "bid_qty_lot": 44,
+              "ask_qty_lot": 20
+            }
+          }
+        ]
+      }
+    ]
+  }
+
+Для arithmetic codec encoded-json дополнительно должен показывать entropy metadata:
+
+  {
+    "entropy": {
+      "type": "arithmetic_static_v1",
+      "streams": {
+        "mask_stream": {
+          "encoding": "arithmetic_static",
+          "symbol_count": 85090,
+          "alphabet_size": 16,
+          "top_symbols": [
+            {"symbol": "0100", "count": 12000},
+            {"symbol": "1000", "count": 9000}
+          ],
+          "frequency_table_bytes": 64,
+          "encoded_bits": 112300
+        }
+      }
+    }
+  }
+
+encoded-json не является production format.
+Он нужен только для debug, обучения и ручного анализа.
+
+D. encoded-binary
+
+Показывает hex/bit-level dump:
+
+  chunk header bytes
+  timestamp stream bytes
+  mask stream bytes
+  bid delta stream bytes
+  spread delta stream bytes
+  bid qty delta stream bytes
+  ask qty delta stream bytes
+  arithmetic frequency table bytes
+  arithmetic payload bytes
+  checksum bytes
+
+E. stats
+
+Показывает:
+
+  pipeline_id
+  record_count
+  raw_runtime_bytes = record_count * 40
+  encoded_bytes
+  compression_ratio
+  bytes_per_record
+
+  timestamp_group_count
+  avg_records_per_timestamp_group
+
+  mask histogram:
+    mask -> count
+
+  field change rates:
+    bid_changed_percent
+    spread_changed_percent
+    bid_qty_changed_percent
+    ask_qty_changed_percent
+
+  stream sizes:
+    header_bytes
+    timestamp_stream_bytes
+    mask_stream_bytes
+    bid_delta_stream_bytes
+    spread_delta_stream_bytes
+    bid_qty_delta_stream_bytes
+    ask_qty_delta_stream_bytes
+    entropy_metadata_bytes
+    checksum_bytes
+
+  arithmetic stats if enabled:
+    stream_name
+    encoding
+    alphabet_size
+    symbol_count
+    raw_bits_estimate
+    encoded_bits
+    bits_per_symbol
+    frequency_table_bytes
+    net_gain_bytes
+
+  encode_time
+  decode_time
+  encode_MBps
+  decode_MBps
+  checksum_status
+
+14. CLI/API expectations
+
+Поддержать примерно такие команды или эквивалент через текущий CLI/API:
+
+  hft-compressor --list-pipelines
+
+  hft-compressor bookticker.jsonl \
+    --pipeline hftmac.bookticker_delta_mask_v1 \
+    --output compressedData/bookticker_delta_mask.cxcef
+
+  hft-compressor bookticker.jsonl \
+    --pipeline hftmac.bookticker_delta_mask_arith_static_v1 \
+    --output compressedData/bookticker_delta_mask_arith.cxcef
+
+  hft-compressor inspect \
+    --input compressedData/bookticker_delta_mask.cxcef \
+    --view canonical-json
+
+  hft-compressor inspect \
+    --input compressedData/bookticker_delta_mask.cxcef \
+    --view canonical-binary
+
+  hft-compressor inspect \
+    --input compressedData/bookticker_delta_mask.cxcef \
+    --view encoded-json
+
+  hft-compressor inspect \
+    --input compressedData/bookticker_delta_mask.cxcef \
+    --view encoded-binary
+
+  hft-compressor inspect \
+    --input compressedData/bookticker_delta_mask.cxcef \
+    --view stats
+
+15. Integration with hft-recorder
+
+In hft-compressor:
+
+  - add codec implementation under src/codecs/bookticker_delta_mask/
+  - add arithmetic entropy implementation under src/entropy/arithmetic/ or similar
+  - register both pipelines in pipeline registry
+  - expose only through public include/hft_compressor APIs
+  - keep existing std.zstd_jsonl_blocks_v1 working
+  - do not break existing decodeHfcFile/decodeHfcBuffer behavior
+  - replay should go through discovery/decode record batch API
+
+In hft-recorder:
+
+  - do not depend on codec internals
+  - GUI lab should discover both pipelines
+  - GUI should display metrics and verification status
+  - validation should compare decoded records with canonical input
+  - replay/backtest should consume decoded batches, not container internals
+
+16. Benchmark matrix
+
+Compare:
+
+  A. std.zstd_jsonl_blocks_v1
+  B. raw binary 40 bytes/object
+  C. raw binary + zstd
+  D. simple delta varint:
+       dt, dbid, dspread, dbid_qty, dask_qty
+  E. hftmac.bookticker_delta_mask_v1:
+       dt + mask + changed deltas only
+  F. hftmac.bookticker_delta_mask_v1 + timestamp groups
+  G. hftmac.bookticker_delta_mask_arith_static_v1:
+       same transform + arithmetic coding on selected streams
+
+For each benchmark output:
+
+  original_jsonl_bytes
+  raw_runtime_bytes
+  encoded_bytes
+  ratio_vs_jsonl
+  ratio_vs_runtime_binary
+  bytes_per_record
+  encode_MBps
+  decode_MBps
+  checksum_status
+  stream size breakdown
+  arithmetic net gain if applicable
+
+17. Main hypothesis
+
+Runtime representation:
+
+  40 bytes/bookticker
+
+Target compressed representation:
+
+  2–4 bytes/bookticker average
+
+Compression win comes from:
+
+  - JSON text is removed
+  - raw binary full fields are replaced by state updates
+  - ask_price is represented as bid_price + spread
+  - first state is stored once per chunk
+  - timestamp is stored as positive delta
+  - unchanged fields are omitted through change_mask
+  - changed values are stored as small ZigZag deltas
+  - arithmetic coding can push frequent masks and small deltas below 1 byte/symbol
+
+Important final principle:
+
+  Do not compress memory layout.
+  Compress information layout.
+
+  Runtime layout is for CPU.
+  Compressed layout is for market-data statistics.

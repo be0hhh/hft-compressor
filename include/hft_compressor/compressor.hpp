@@ -158,6 +158,10 @@ HFT_COMPRESSOR_API Status decodeReplayArtifactJsonl(const ReplayArtifactInfo& ar
                     const DecodedBlockCallback& onBlock) noexcept;
 HFT_COMPRESSOR_API Status decodeReplayJsonl(const ReplayArtifactRequest& request,
                     const DecodedBlockCallback& onBlock) noexcept;
+HFT_COMPRESSOR_API Status inspectCompressedArtifact(const std::filesystem::path& path,
+                    std::string_view pipelineId,
+                    std::string_view view,
+                    const DecodedBlockCallback& onBlock) noexcept;
 HFT_COMPRESSOR_API Status decodeReplayRecords(const ReplayArtifactRequest& request,
                     const DecodedRecordCallback& onRecord) noexcept;
 HFT_COMPRESSOR_API HfcFileInfo openHfcFile(const std::filesystem::path& path) noexcept;

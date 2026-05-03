@@ -1,0 +1,574 @@
+Нужно разработать и встроить в текущий hft-compressor новый lossless replay-oriented codec только для trades.
+
+Контекст репозиториев:
+
+1. hft-recorder сейчас является GUI-first research lab на Qt/QML поверх CXETCPP.
+   Текущий workflow:
+     capture normalized market data
+     open session in validation/chart views
+     run baseline/custom compression pipelines in lab
+     compare ratio, encode speed, decode speed, lossless accuracy inside GUI
+
+2. Канонический session corpus сейчас JSON-based:
+     trades.jsonl
+     bookticker.jsonl
+     depth.jsonl
+
+3. hft-compressor является отдельным standalone compression core.
+   Он собирается отдельно и подключается в hft-recorder как prebuilt shared library.
+   Нельзя тащить compressor в recorder через add_subdirectory.
+   Public API должен оставаться в include/hft_compressor/.
+   Recorder не должен зависеть от private src/ compressor-а.
+
+4. Сейчас реально implemented baseline:
+     std.zstd_jsonl_blocks_v1
+
+   Остальные pipeline descriptors могут быть placeholders.
+   Новый trade codec нужно добавить как нормальный pipeline, не ломая registry/public API.
+
+5. Compressor архитектурно должен быть pipeline-based:
+     stream scope
+     representation
+     transform
+     entropy stage
+     profile
+
+   Новый pipeline должен быть replay/research profile.
+
+6. Replay contract:
+   compressor является storage/decode boundary.
+   Replay consumers не должны руками строить пути к .hfc/.cxcef.
+   Они должны использовать discovery/decode API.
+   Decode должен быть streaming/block-based.
+   Нельзя materialize весь decoded corpus для replay.
+
+7. Для hot replay/backtest ориентироваться на decodeReplayRecordBatches().
+   Новый codec должен уметь decode в neutral typed trade batches.
+   Container layout и internal encoded format не должны leak-иться наружу.
+   Recorder/CXETCPP дальше сам решает, куда отправлять decoded rows: parser, replay rows, callbacks, queues, GUI, algorithm code.
+
+Задача:
+
+Сделать новый pipeline примерно:
+
+  hftmac.trades_grouped_delta_qtydict_v1
+
+Цель:
+  - input: canonical trades.jsonl или canonical trade records, в зависимости от текущих API
+  - output: binary compressor-owned artifact
+  - decode: streaming decoded trade batches
+  - lossless 100%
+  - target ratio: стремиться к ~10x относительно 25 bytes/trade runtime layout
+  - decode должен быть быстрым для backtest/replay
+  - WSL / Ubuntu 24 server friendly
+  - не для live trading, только для offline backtest/research
+
+Trade semantic model:
+
+  Trade = {
+    ts_ns,
+    price_scaled_int64,
+    qty_scaled_int64,
+    side
+  }
+
+Runtime memory layout оптимизирован под CPU, но compressed layout должен быть другим.
+Compressed layout должен хранить не fixed 25-byte structs, а математические коды:
+  time groups
+  price groups
+  deltas
+  ZigZag
+  bit-packed side
+  hot quantity dictionary
+  varints
+  optional entropy stage
+
+Core compression idea:
+
+  trades compress as:
+    timestamp groups -> price/side groups -> qty codes
+
+1. Chunking
+
+Разбить trade stream на chunks.
+
+Для каждого chunk хранить header:
+  magic
+  version
+  pipeline_id
+  stream_type = trades
+  record_count
+  first_ts_ns
+  last_ts_ns
+  base_ts_unit
+  base_price_tick
+  price_scale
+  qty_scale
+  time_scale
+  hot_qty_table
+  checksum / hash for lossless verification
+  byte sizes of internal streams
+
+Chunk size подобрать benchmark-ом:
+  4K / 16K / 32K / 64K trades per chunk
+
+Нужны метрики:
+  compression ratio
+  bytes/trade
+  encode MB/s
+  decode MB/s
+  checksum status
+  hot_qty hit rate
+  timestamp_group_count
+  price_group_count
+
+2. Normalization
+
+Для каждого trade:
+
+  ts_unit    = ts_ns / time_scale
+  price_tick = price_scaled_int64 / price_scale
+  qty_lot    = qty_scaled_int64 / qty_scale
+
+Если значение делится на scale без остатка:
+  использовать compact normalized path.
+
+Если не делится:
+  использовать fallback raw path для конкретного значения или всего chunk-а.
+  Lossless важнее ratio.
+
+3. Timestamp model
+
+Timestamp монотонный, поэтому:
+
+  dt = current_ts_unit - previous_ts_unit
+
+dt всегда >= 0.
+
+Первый timestamp хранить в chunk header как base_ts_unit.
+Дальше хранить только positive dt.
+
+Но главное:
+  trades с одинаковым ts_unit не кодировать как отдельные records с dt=0.
+  Вместо этого склеивать их в timestamp group.
+
+Timestamp group format:
+
+  dt_from_previous_timestamp_group
+  price_group_count
+
+Пример:
+
+  source:
+    ts=1000 p=81402 q=7 side=0
+    ts=1000 p=81402 q=5 side=0
+    ts=1000 p=81403 q=20 side=1
+    ts=1001 p=81403 q=7 side=1
+
+  encoded:
+    time_group dt=0
+      ...
+    time_group dt=1
+      ...
+
+4. Price model
+
+Цена не монотонная, поэтому использовать signed residual:
+
+  dp = current_price_tick - predicted_price_tick
+
+Минимальный predictor:
+  predicted_price_tick = previous_price_tick
+
+Дополнительно проверить predictor:
+  predicted_price_tick = previous_price_tick_for_same_side[side]
+
+Signed dp кодировать через ZigZag:
+
+   0 -> 0
+  -1 -> 1
+  +1 -> 2
+  -2 -> 3
+  +2 -> 4
+
+Внутри одного timestamp group склеивать consecutive trades с одинаковыми:
+
+  price_tick
+  side
+
+в один price group.
+
+Price group format:
+
+  price_residual_or_delta
+  side
+  trade_count
+  qty_codes[trade_count]
+
+То есть если timestamp, price и side одинаковые, то ts/price/side не пишутся на каждый trade.
+Они пишутся один раз на group, а внутри остаются только quantities.
+
+5. Side model
+
+side = 0/1.
+
+В simple mode:
+  bitpack side as 1 bit per trade.
+
+В grouped mode:
+  side хранить один раз на price group.
+
+Grouped mode предпочтительнее, потому что side становится почти бесплатным.
+
+6. Quantity model
+
+qty нельзя хорошо сжимать через delta.
+Нужно использовать frequency model.
+
+Для каждого chunk построить hot_qty_table:
+
+  hot_qty[0..N-1]
+
+Проверить N:
+  16
+  32
+  64
+  128
+
+Encoding qty_lot:
+
+  if qty_lot exists in hot_qty_table:
+    write HOT marker + hot index
+  else:
+    write ESCAPE marker + varint(qty_lot)
+
+Нужно benchmark-ом выбрать лучший N.
+Минимальный вариант:
+  qty_lot as varint.
+
+Улучшенный вариант:
+  hot_qty_table + escape varint.
+
+Нельзя терять точность.
+Decoded qty_scaled_int64 должен быть точно равен исходному qty.
+
+7. Internal streams
+
+Не писать encoded data object-by-object.
+
+Лучше хранить columnar/internal streams:
+
+  timestamp_group_stream:
+    dt
+    price_group_count
+
+  price_group_stream:
+    price_delta_or_residual
+    side
+    trade_count
+
+  qty_code_stream:
+    hot/escape flags
+    hot indexes
+
+  qty_escape_stream:
+    raw varint qty_lot for rare quantities
+
+  optional:
+    checksum stream
+    debug metadata stream
+
+На первом этапе можно сделать простой varint stream.
+На втором этапе можно добавить entropy stage:
+  zstd fast
+  lz4
+  rANS/range coding later
+
+8. Container / artifact
+
+Не ломать текущий .hfc baseline.
+Новый codec может использовать новый compressor-owned binary artifact:
+  .cxcef
+  или другой internal extension
+
+Но consumer не должен знать path/extension.
+Он должен пользоваться:
+  discoverReplayArtifact()
+  decodeReplayRecordBatches()
+  public API
+
+9. Decode
+
+Decoder должен работать streaming:
+
+  open artifact
+  read chunk header
+  decode timestamp groups
+  decode price groups
+  decode qty codes
+  reconstruct trades in exact original order
+  emit neutral typed trade batch
+  discard chunk scratch memory
+
+Нельзя materialize весь decoded corpus.
+
+Decode должен восстановить:
+  ts_ns
+  price_scaled_int64
+  qty_scaled_int64
+  side
+
+100% identical to canonical source semantic records.
+
+10. Verification
+
+Добавить hard verification:
+
+  encode input trades
+  decode artifact
+  compare decoded canonical trade records with original canonical trade records
+  checksum per chunk
+  total checksum
+  record_count match
+  first_ts/last_ts match
+  byte/semantic equality status
+
+Для recorder GUI/lab нужно отдать metrics:
+  pipeline_id
+  status
+  original_runtime_bytes = record_count * 25
+  encoded_bytes
+  ratio
+  encode_time
+  decode_time
+  encode_MBps
+  decode_MBps
+  bytes_per_trade
+  timestamp_group_count
+  avg_trades_per_timestamp_group
+  price_group_count
+  avg_trades_per_price_group
+  hot_qty_hit_rate
+  qty_escape_count
+  stream sizes:
+    header_bytes
+    timestamp_stream_bytes
+    price_group_stream_bytes
+    qty_code_stream_bytes
+    qty_escape_stream_bytes
+    checksum_bytes
+
+11. Inspect/debug modes
+
+Нужно добавить inspect режимы, чтобы можно было глазами понять codec.
+
+Поддержать views:
+
+A. canonical-json
+
+Показывает decoded trades в обычном каноничном JSON:
+
+  [
+    [ts_ns, price, qty, side],
+    ...
+  ]
+
+Нужно для проверки и совместимости.
+
+B. canonical-binary
+
+Показывает runtime/canonical binary records:
+
+  record_index
+  ts_ns
+  price_raw
+  qty_raw
+  side
+  binary_offset
+  raw_bytes_hex
+
+Нужно для понимания, как trade лежит в binary/runtime representation.
+
+C. encoded-json
+
+Показывает внутреннюю структуру codec-а в человекочитаемом виде:
+
+  {
+    "header": {
+      "record_count": 5,
+      "base_ts_unit": 1000,
+      "base_price_tick": 81402,
+      "price_scale": 1000,
+      "qty_scale": 100000000,
+      "time_scale": 1000000,
+      "hot_qty_table": [7, 20, 5]
+    },
+    "time_groups": [
+      {
+        "dt": 0,
+        "price_groups": [
+          {
+            "dp": 0,
+            "side": 0,
+            "count": 3,
+            "qty_codes": [0, 2, 0],
+            "qty_values": [7, 5, 7]
+          },
+          {
+            "dp": 1,
+            "side": 1,
+            "count": 1,
+            "qty_codes": [1],
+            "qty_values": [20]
+          }
+        ]
+      }
+    ]
+  }
+
+Этот JSON не должен быть production format.
+Он нужен только для debug и защиты идеи.
+
+D. encoded-binary
+
+Показывает hex/bit-level dump encoded payload:
+
+  chunk header bytes
+  timestamp stream bytes
+  price group stream bytes
+  qty code stream bytes
+  qty escape stream bytes
+  checksum bytes
+
+E. stats
+
+Показывает все metrics codec-а.
+
+Пример CLI:
+
+  hft-compressor --list-pipelines
+
+  hft-compressor trades.jsonl \
+    --pipeline hftmac.trades_grouped_delta_qtydict_v1 \
+    compressedData
+
+  hft-compressor inspect \
+    --input <artifact> \
+    --view canonical-json
+
+  hft-compressor inspect \
+    --input <artifact> \
+    --view canonical-binary
+
+  hft-compressor inspect \
+    --input <artifact> \
+    --view encoded-json
+
+  hft-compressor inspect \
+    --input <artifact> \
+    --view encoded-binary
+
+  hft-compressor inspect \
+    --input <artifact> \
+    --view stats
+
+12. Integration with current repos
+
+In hft-compressor:
+  - add codec implementation under src/codecs/trades_grouped_delta_qtydict/
+  - add container support if needed under src/container/
+  - register pipeline in src/pipelines/
+  - expose only through public include/hft_compressor APIs
+  - keep baseline std.zstd_jsonl_blocks_v1 working
+  - keep decodeHfcFile/decodeHfcBuffer baseline-specific
+  - route replay usage through discover/decode APIs
+
+In hft-recorder:
+  - do not depend on codec internals
+  - GUI lab should discover pipeline and display metrics
+  - validation should compare lossless result
+  - replay/backtest path should consume decoded record batches, not file internals
+  - canonical JSON corpus remains accepted input
+
+13. Benchmark matrix
+
+Compare:
+
+  A. std.zstd_jsonl_blocks_v1
+  B. raw binary + zstd baseline
+  C. scaled delta varint trades
+  D. timestamp grouped + price delta + side bitpack + qty varint
+  E. timestamp group + price/side group + hot qty table
+  F. E + zstd/lz4/rANS on internal streams
+
+Main hypothesis:
+
+  Runtime layout:
+    25 bytes/trade
+
+  Target:
+    around 2.5 bytes/trade average
+
+  Compression win comes from:
+    timestamp stored per group, not per trade
+    price stored as small ZigZag residual
+    repeated timestamp+price+side collapsed into groups
+    side stored as 1 bit or once per group
+    qty stored through hot table + escape varint
+    binary stores codes/groups/deltas, not fixed absolute fields
+14. Arithmetic coding / entropy stage
+
+Арифметическое кодирование внедрять не как отдельное сжатие raw records, а как entropy stage после grouped trade representation.
+
+Сделать отдельный pipeline variant:
+
+  hftmac.trades_grouped_delta_qtydict_arith_static_v1
+
+Base representation остаётся такой же:
+  timestamp groups
+  price/side groups
+  price residual ZigZag
+  qty hot table + escape
+  side once per group
+
+Arithmetic coding применять отдельно к внутренним streams:
+
+  - timestamp dt stream
+  - price residual ZigZag stream
+  - price_group_count stream
+  - trade_count stream
+  - qty hot-code stream
+
+Не обязательно применять к:
+  - side stream, если side уже хранится once per group или bitpacked
+  - qty escape raw values, их можно оставить varint
+
+Static arithmetic per chunk:
+  1. encoder строит frequency table для каждого selected stream
+  2. frequency tables пишутся в chunk header
+  3. stream кодируется arithmetic coder-ом
+  4. decoder читает frequency table и восстанавливает stream
+
+Debug/stats должны показывать:
+  - какие streams использовали arithmetic coding
+  - alphabet size
+  - top symbols
+  - raw bits
+  - encoded bits
+  - bits per symbol
+  - compression gain per stream
+
+Сравнить варианты:
+  A. grouped codec без entropy
+  B. grouped codec + zstd on streams
+  C. grouped codec + arithmetic static on selected streams
+  D. grouped codec + arithmetic for qty only
+  E. grouped codec + arithmetic for price residual only
+
+Главная гипотеза:
+  arithmetic coding может дать дополнительный выигрыш там, где varint тратит минимум 1 byte, а фактическая энтропия символа меньше 8 bits.
+  Особенно перспективны:
+    price_residual_zigzag
+    qty_hot_code
+    timestamp_dt
+    group_count

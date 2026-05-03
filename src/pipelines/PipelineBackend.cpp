@@ -2,19 +2,21 @@
 
 #include <array>
 
+#include "codecs/bookticker_delta_mask/BookTickerDeltaMask.hpp"
 #include "codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.hpp"
+#include "codecs/depth_ladder_offset/DepthLadderOffset.hpp"
+#include "codecs/depth_ladder_offset/DepthLadderOffsetV2.hpp"
 #include "codecs/gzip_jsonl_blocks/GzipJsonlBlocks.hpp"
-#include "codecs/hftmac_raw_binary/HftMacRawBinary.hpp"
-#include "codecs/hftmac_varint/HftMacVarint.hpp"
 #include "codecs/lz4_jsonl_blocks/Lz4JsonlBlocks.hpp"
 #include "codecs/raw_jsonl_blocks/RawJsonlBlocks.hpp"
+#include "codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.hpp"
 #include "codecs/xz_jsonl_blocks/XzJsonlBlocks.hpp"
 #include "codecs/zstd_jsonl_blocks/ZstdJsonlBlocks.hpp"
 
 namespace hft_compressor::pipelines {
 namespace {
 
-constexpr std::array<PipelineBackend, 12> kBackends{{
+constexpr std::array<PipelineBackend, 10> kBackends{{
     {"std.zstd_jsonl_blocks_v1",
      "hfc.zstd_jsonl_blocks_v1",
      codecs::zstd_jsonl_blocks::compress,
@@ -51,42 +53,31 @@ constexpr std::array<PipelineBackend, 12> kBackends{{
      codecs::gzip_jsonl_blocks::inspectArtifact,
      codecs::gzip_jsonl_blocks::decodeFile,
      codecs::gzip_jsonl_blocks::decode},
-    {"trade.hftmac_varint_v1",
-     "hftmac.trade.varint.v1",
-     codecs::hftmac_varint::compressTradeVarint,
-     codecs::hftmac_varint::inspectTradeVarint,
-     codecs::hftmac_varint::decodeTradeVarintFile,
-     codecs::hftmac_varint::decodeTradeVarint},
-    {"bookticker.hftmac_varint_v1",
-     "hftmac.bookticker.varint.v1",
-     codecs::hftmac_varint::compressBookTickerVarint,
-     codecs::hftmac_varint::inspectBookTickerVarint,
-     codecs::hftmac_varint::decodeBookTickerVarintFile,
-     codecs::hftmac_varint::decodeBookTickerVarint},
-    {"depth.hftmac_varint_v1",
-     "hftmac.depth.varint.v1",
-     codecs::hftmac_varint::compressDepthVarint,
-     codecs::hftmac_varint::inspectDepthVarint,
-     codecs::hftmac_varint::decodeDepthVarintFile,
-     codecs::hftmac_varint::decodeDepthVarint},
-    {"trade.hftmac_raw_binary_v1",
-     "hftmac.trade.raw_binary.v1",
-     codecs::hftmac_raw_binary::compressTradeRawBinary,
-     codecs::hftmac_raw_binary::inspectTradeRawBinary,
-     codecs::hftmac_raw_binary::decodeTradeRawBinaryFile,
-     codecs::hftmac_raw_binary::decodeTradeRawBinary},
-    {"bookticker.hftmac_raw_binary_v1",
-     "hftmac.bookticker.raw_binary.v1",
-     codecs::hftmac_raw_binary::compressBookTickerRawBinary,
-     codecs::hftmac_raw_binary::inspectBookTickerRawBinary,
-     codecs::hftmac_raw_binary::decodeBookTickerRawBinaryFile,
-     codecs::hftmac_raw_binary::decodeBookTickerRawBinary},
-    {"depth.hftmac_raw_binary_v1",
-     "hftmac.depth.raw_binary.v1",
-     codecs::hftmac_raw_binary::compressDepthRawBinary,
-     codecs::hftmac_raw_binary::inspectDepthRawBinary,
-     codecs::hftmac_raw_binary::decodeDepthRawBinaryFile,
-     codecs::hftmac_raw_binary::decodeDepthRawBinary},
+
+    {"hftmac.trades_grouped_delta_qtydict_math_v3",
+     "hftmac.trades_grouped_delta_qtydict.math.v3",
+     codecs::trades_grouped_delta_qtydict::compress,
+     codecs::trades_grouped_delta_qtydict::inspectArtifact,
+     codecs::trades_grouped_delta_qtydict::decodeFile,
+     codecs::trades_grouped_delta_qtydict::decode},
+    {"hftmac.bookticker_delta_mask_v1",
+     "hftmac.bookticker_delta_mask.v1",
+     codecs::bookticker_delta_mask::compress,
+     codecs::bookticker_delta_mask::inspectArtifact,
+     codecs::bookticker_delta_mask::decodeFile,
+     codecs::bookticker_delta_mask::decode},
+    {"hftmac.depth_ladder_offset_v1",
+     "hftmac.depth_ladder_offset.v1",
+     codecs::depth_ladder_offset::compress,
+     codecs::depth_ladder_offset::inspectArtifact,
+     codecs::depth_ladder_offset::decodeFile,
+     codecs::depth_ladder_offset::decode},
+    {"hftmac.depth_ladder_offset_v2",
+     "hftmac.depth_ladder_offset.v2",
+     codecs::depth_ladder_offset_v2::compress,
+     codecs::depth_ladder_offset_v2::inspectArtifact,
+     codecs::depth_ladder_offset_v2::decodeFile,
+     codecs::depth_ladder_offset_v2::decode},
 }};
 
 }  // namespace

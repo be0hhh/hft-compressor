@@ -57,10 +57,18 @@ std::string toMetricsJson(const CompressionResult& result) {
     out << "  " << q << "block_count" << q << ": " << result.blockCount << ',' << '\n';
     out << "  " << q << "encode_ns" << q << ": " << result.encodeNs << ',' << '\n';
     out << "  " << q << "decode_ns" << q << ": " << result.decodeNs << ',' << '\n';
+    out << "  " << q << "read_ns" << q << ": " << result.readNs << ',' << '\n';
+    out << "  " << q << "parse_ns" << q << ": " << result.parseNs << ',' << '\n';
+    out << "  " << q << "encode_core_ns" << q << ": " << result.encodeCoreNs << ',' << '\n';
+    out << "  " << q << "write_ns" << q << ": " << result.writeNs << ',' << '\n';
+    out << "  " << q << "decode_core_ns" << q << ": " << result.decodeCoreNs << ',' << '\n';
+    out << "  " << q << "verify_ns" << q << ": " << result.verifyNs << ',' << '\n';
     out << "  " << q << "encode_cycles" << q << ": " << result.encodeCycles << ',' << '\n';
     out << "  " << q << "decode_cycles" << q << ": " << result.decodeCycles << ',' << '\n';
     out << "  " << q << "encode_mb_per_sec" << q << ": " << encodeMbPerSec(result) << ',' << '\n';
     out << "  " << q << "decode_mb_per_sec" << q << ": " << decodeMbPerSec(result) << ',' << '\n';
+    out << "  " << q << "encode_core_mb_per_sec" << q << ": " << (result.encodeCoreNs == 0u ? 0.0 : (static_cast<double>(result.inputBytes) / (1024.0 * 1024.0)) / (static_cast<double>(result.encodeCoreNs) / 1000000000.0)) << ',' << '\n';
+    out << "  " << q << "decode_core_mb_per_sec" << q << ": " << (result.decodeCoreNs == 0u ? 0.0 : (static_cast<double>(result.inputBytes) / (1024.0 * 1024.0)) / (static_cast<double>(result.decodeCoreNs) / 1000000000.0)) << ',' << '\n';
     out << "  " << q << "roundtrip_ok" << q << ": " << (result.roundtripOk ? "true" : "false") << '\n';
     out << '}' << '\n';
     return out.str();

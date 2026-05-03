@@ -77,18 +77,15 @@ endif()
 
 add_library(hft_compressor_core SHARED
     src/c_api.cpp
+    src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp
     src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.cpp
+    src/codecs/depth_ladder_offset/DepthLadderOffset.cpp
+    src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp
     src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.cpp
-    src/codecs/hftmac_common/HftMacCommon.cpp
-    src/codecs/hftmac_raw_binary/BookTicker.cpp
-    src/codecs/hftmac_raw_binary/Depth.cpp
-    src/codecs/hftmac_raw_binary/Trade.cpp
-    src/codecs/hftmac_varint/BookTicker.cpp
-    src/codecs/hftmac_varint/Depth.cpp
-    src/codecs/hftmac_varint/Trade.cpp
     src/codecs/lz4_jsonl_blocks/Lz4JsonlBlocks.cpp
     src/codecs/raw_jsonl_blocks/RawJsonlBlocks.cpp
     src/codecs/standard_jsonl_blocks/StandardJsonlBlocks.cpp
+    src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp
     src/codecs/xz_jsonl_blocks/XzJsonlBlocks.cpp
     src/codecs/zstd_jsonl_blocks/ZstdJsonlBlocks.cpp
     src/common/CompressionInternals.cpp

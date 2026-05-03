@@ -178,6 +178,11 @@ int main() {
     assert(hft_compressor::findPipeline("depth.hftmac_raw_binary_v1") != nullptr);
     assert(hft_compressor::findPipeline("trade.hftmac_ac16_ctx8_v1") != nullptr);
     assert(hft_compressor::findPipeline("custom.ac_bin16_ctx8_v1") != nullptr);
+    assert(hft_compressor::findPipeline("hftmac.trades_grouped_delta_qtydict_math_v2") == nullptr);
+    assert(hft_compressor::findPipeline("hftmac.trades_grouped_delta_qtydict_math_v3") != nullptr);
+    assert(hft_compressor::findPipeline("hftmac.bookticker_delta_mask_v1") != nullptr);
+    assert(hft_compressor::findPipeline("hftmac.depth_ladder_offset_v1") != nullptr);
+    assert(hft_compressor::findPipeline("hftmac.trades_grouped_delta_qtydict_v1") == nullptr);
     assert(hft_compressor::findPipeline("missing.pipeline") == nullptr);
 
     const auto dir = fs::temp_directory_path() / "hft_compressor_tests";
@@ -201,6 +206,63 @@ int main() {
     spacedHftMacRequest.pipelineId = "trade.hftmac_varint_v1";
     assert(hft_compressor::compress(spacedHftMacRequest).status == hft_compressor::Status::CorruptData);
 
+    hft_compressor::CompressionRequest tradeMathV3Request{};
+    tradeMathV3Request.inputPath = input;
+    tradeMathV3Request.outputRoot = dir / "trade_math_v3_out";
+    tradeMathV3Request.pipelineId = "hftmac.trades_grouped_delta_qtydict_math_v3";
+    const auto tradeMathV3Result = hft_compressor::compress(tradeMathV3Request);
+    assert(hft_compressor::isOk(tradeMathV3Result.status));
+    assert(tradeMathV3Result.roundtripOk);
+    hft_compressor::ReplayArtifactRequest tradeMathV3ArtifactRequest{};
+    tradeMathV3ArtifactRequest.compressedRoot = tradeMathV3Request.outputRoot;
+    tradeMathV3ArtifactRequest.sessionDir = input.parent_path();
+    tradeMathV3ArtifactRequest.streamType = hft_compressor::StreamType::Trades;
+    tradeMathV3ArtifactRequest.preferredPipelineId = "hftmac.trades_grouped_delta_qtydict_math_v3";
+    const auto tradeMathV3Artifact = hft_compressor::discoverReplayArtifact(tradeMathV3ArtifactRequest);
+    assert(hft_compressor::isOk(tradeMathV3Artifact.status));
+    assert(tradeMathV3Artifact.formatId == "hftmac.trades_grouped_delta_qtydict.math.v3");
+    std::string tradeMathV3Decoded;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayArtifactJsonl(tradeMathV3Artifact, [&tradeMathV3Decoded](std::span<const std::uint8_t> block) {
+        tradeMathV3Decoded.append(reinterpret_cast<const char*>(block.data()), block.size());
+        return true;
+    })));
+    assert(tradeMathV3Decoded == "[1,2,1,100]\n[2,3,0,200]\n");
+
+    const auto bookMathInput = dir / "bookticker.jsonl";
+    writeFile(bookMathInput, "[100,10,110,20,1000]\n[100,9,110,20,1001]\n[101,9,111,22,1001]\n");
+    hft_compressor::CompressionRequest bookMathRequest{};
+    bookMathRequest.inputPath = bookMathInput;
+    bookMathRequest.outputRoot = dir / "book_math_out";
+    bookMathRequest.pipelineId = "hftmac.bookticker_delta_mask_v1";
+    const auto bookMathResult = hft_compressor::compress(bookMathRequest);
+    assert(hft_compressor::isOk(bookMathResult.status));
+    assert(bookMathResult.roundtripOk);
+    hft_compressor::ReplayArtifactRequest bookMathArtifactRequest{};
+    bookMathArtifactRequest.compressedRoot = bookMathRequest.outputRoot;
+    bookMathArtifactRequest.sessionDir = bookMathInput.parent_path();
+    bookMathArtifactRequest.streamType = hft_compressor::StreamType::BookTicker;
+    bookMathArtifactRequest.preferredPipelineId = "hftmac.bookticker_delta_mask_v1";
+    const auto bookMathArtifact = hft_compressor::discoverReplayArtifact(bookMathArtifactRequest);
+    assert(hft_compressor::isOk(bookMathArtifact.status));
+    assert(bookMathArtifact.formatId == "hftmac.bookticker_delta_mask.v1");
+
+    const auto depthMathInput = dir / "depth.jsonl";
+    writeFile(depthMathInput, "[[100,10,0],[110,20,1],1000]\n[[100,9,0],[111,22,1],1001]\n[[100,0,0],[99,7,0],1002]\n");
+    hft_compressor::CompressionRequest depthMathRequest{};
+    depthMathRequest.inputPath = depthMathInput;
+    depthMathRequest.outputRoot = dir / "depth_math_out";
+    depthMathRequest.pipelineId = "hftmac.depth_ladder_offset_v1";
+    const auto depthMathResult = hft_compressor::compress(depthMathRequest);
+    assert(hft_compressor::isOk(depthMathResult.status));
+    assert(depthMathResult.roundtripOk);
+    hft_compressor::ReplayArtifactRequest depthMathArtifactRequest{};
+    depthMathArtifactRequest.compressedRoot = depthMathRequest.outputRoot;
+    depthMathArtifactRequest.sessionDir = depthMathInput.parent_path();
+    depthMathArtifactRequest.streamType = hft_compressor::StreamType::Depth;
+    depthMathArtifactRequest.preferredPipelineId = "hftmac.depth_ladder_offset_v1";
+    const auto depthMathArtifact = hft_compressor::discoverReplayArtifact(depthMathArtifactRequest);
+    assert(hft_compressor::isOk(depthMathArtifact.status));
+    assert(depthMathArtifact.formatId == "hftmac.depth_ladder_offset.v1");
     hft_compressor::CompressionRequest missingPipeline{};
     missingPipeline.inputPath = input;
     missingPipeline.pipelineId = "missing.pipeline";
