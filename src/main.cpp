@@ -6,6 +6,7 @@
 #include "codecs/bookticker_delta_mask/BookTickerDeltaMask.hpp"
 #include "codecs/depth_ladder_offset/DepthLadderOffset.hpp"
 #include "codecs/depth_ladder_offset/DepthLadderOffsetV2.hpp"
+#include "codecs/entropy_hftmac/EntropyHftMac.hpp"
 #include "codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.hpp"
 #include "hft_compressor/compressor.hpp"
 
@@ -45,6 +46,13 @@ int main(int argc, char** argv) {
             printBlock(block);
             return true;
         };
+        const auto tryEntropy = [&]() noexcept {
+            if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::entropy_hftmac::decodeFile(input, callback);
+            if (view == "encoded-json") return hft_compressor::codecs::entropy_hftmac::inspectEncodedJsonFile(input, callback);
+            if (view == "encoded-binary") return hft_compressor::codecs::entropy_hftmac::inspectEncodedBinaryFile(input, callback);
+            if (view == "stats") return hft_compressor::codecs::entropy_hftmac::inspectStatsJsonFile(input, callback);
+            return hft_compressor::Status::InvalidArgument;
+        };
         const auto tryTrade = [&]() noexcept {
             if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::trades_grouped_delta_qtydict::decodeFile(input, callback);
             if (view == "encoded-json") return hft_compressor::codecs::trades_grouped_delta_qtydict::inspectEncodedJsonFile(input, callback);
@@ -78,7 +86,8 @@ int main(int argc, char** argv) {
             if (!hft_compressor::isOk(st)) st = tryDepthV2();
             return st;
         };
-        status = tryTrade();
+        status = tryEntropy();
+        if (!hft_compressor::isOk(status)) status = tryTrade();
         if (!hft_compressor::isOk(status)) status = tryBookTicker();
         if (!hft_compressor::isOk(status)) status = tryDepth();
         if (!hft_compressor::isOk(status)) {

@@ -15,6 +15,7 @@
 #include "codecs/bookticker_delta_mask/BookTickerDeltaMask.hpp"
 #include "codecs/depth_ladder_offset/DepthLadderOffset.hpp"
 #include "codecs/depth_ladder_offset/DepthLadderOffsetV2.hpp"
+#include "codecs/entropy_hftmac/EntropyHftMac.hpp"
 #include "codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.hpp"
 #include "hft_compressor/replay_decode.hpp"
 #include "pipelines/PipelineBackend.hpp"
@@ -487,6 +488,15 @@ Status inspectCompressedArtifact(const std::filesystem::path& path,
                                  std::string_view view,
                                  const DecodedBlockCallback& onBlock) noexcept {
     if (path.empty() || pipelineId.empty() || view.empty() || !onBlock) return Status::InvalidArgument;
+    if (pipelineId.find("_ac16_") != std::string_view::npos
+        || pipelineId.find("_ac32_") != std::string_view::npos
+        || pipelineId.find("_range_byte_") != std::string_view::npos
+        || pipelineId.find("_rans_byte_") != std::string_view::npos) {
+        if (view == "canonical-json" || view == "canonical-jsonl") return codecs::entropy_hftmac::decodeFile(path, onBlock);
+        if (view == "encoded-json") return codecs::entropy_hftmac::inspectEncodedJsonFile(path, onBlock);
+        if (view == "encoded-binary") return codecs::entropy_hftmac::inspectEncodedBinaryFile(path, onBlock);
+        if (view == "stats") return codecs::entropy_hftmac::inspectStatsJsonFile(path, onBlock);
+    }
     if (pipelineId == "hftmac.trades_grouped_delta_qtydict_math_v3" || pipelineId == "hftmac.trades_grouped_delta_qtydict_v1") {
         if (view == "canonical-json" || view == "canonical-jsonl") {
             return codecs::trades_grouped_delta_qtydict::decodeFile(path, onBlock);

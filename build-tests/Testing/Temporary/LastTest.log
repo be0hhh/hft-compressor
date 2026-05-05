@@ -1,18 +1,18 @@
-Start testing: May 05 16:51 MSK
+Start testing: May 05 21:44 MSK
 ----------------------------------------------------------
 1/1 Testing: hft-compressor-tests
 1/1 Test: hft-compressor-tests
 Command: "/mnt/c/Users/be0h/PycharmProjects/course project/CXETCPP/apps/hft-compressor/build-tests/hft-compressor-tests"
 Directory: /mnt/c/Users/be0h/PycharmProjects/course project/CXETCPP/apps/hft-compressor/build-tests
-"hft-compressor-tests" start time: May 05 16:51 MSK
+"hft-compressor-tests" start time: May 05 21:44 MSK
 Output:
 ----------------------------------------------------------
 <end of output>
 Test time =   0.02 sec
 ----------------------------------------------------------
 Test Passed.
-"hft-compressor-tests" end time: May 05 16:51 MSK
+"hft-compressor-tests" end time: May 05 21:44 MSK
 "hft-compressor-tests" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-End testing: May 05 16:51 MSK
+End testing: May 05 21:44 MSK

@@ -36,6 +36,7 @@ std::uint64_t countLines(std::span<const std::uint8_t> data, bool isLastBlock) n
 
 std::string sessionIdForInput(const std::filesystem::path& inputPath) {
     const auto parent = inputPath.parent_path();
+    if (parent.filename() == "jsonl" && !parent.parent_path().empty()) return parent.parent_path().filename().string();
     if (!parent.empty()) return parent.filename().string();
     return std::string{"manual_"} + inputPath.stem().string();
 }

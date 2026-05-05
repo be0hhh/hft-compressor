@@ -285,6 +285,30 @@ src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.s
 .PHONY : src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.s
 
+src/codecs/entropy_hftmac/EntropyHftMac.o: src/codecs/entropy_hftmac/EntropyHftMac.cpp.o
+.PHONY : src/codecs/entropy_hftmac/EntropyHftMac.o
+
+# target to build an object file
+src/codecs/entropy_hftmac/EntropyHftMac.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/entropy_hftmac/EntropyHftMac.cpp.o
+.PHONY : src/codecs/entropy_hftmac/EntropyHftMac.cpp.o
+
+src/codecs/entropy_hftmac/EntropyHftMac.i: src/codecs/entropy_hftmac/EntropyHftMac.cpp.i
+.PHONY : src/codecs/entropy_hftmac/EntropyHftMac.i
+
+# target to preprocess a source file
+src/codecs/entropy_hftmac/EntropyHftMac.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/entropy_hftmac/EntropyHftMac.cpp.i
+.PHONY : src/codecs/entropy_hftmac/EntropyHftMac.cpp.i
+
+src/codecs/entropy_hftmac/EntropyHftMac.s: src/codecs/entropy_hftmac/EntropyHftMac.cpp.s
+.PHONY : src/codecs/entropy_hftmac/EntropyHftMac.s
+
+# target to generate assembly for a file
+src/codecs/entropy_hftmac/EntropyHftMac.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/entropy_hftmac/EntropyHftMac.cpp.s
+.PHONY : src/codecs/entropy_hftmac/EntropyHftMac.cpp.s
+
 src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.o: src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.cpp.o
 .PHONY : src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.o
 
@@ -792,6 +816,9 @@ help:
 	@echo "... src/codecs/depth_ladder_offset/DepthLadderOffsetV2.o"
 	@echo "... src/codecs/depth_ladder_offset/DepthLadderOffsetV2.i"
 	@echo "... src/codecs/depth_ladder_offset/DepthLadderOffsetV2.s"
+	@echo "... src/codecs/entropy_hftmac/EntropyHftMac.o"
+	@echo "... src/codecs/entropy_hftmac/EntropyHftMac.i"
+	@echo "... src/codecs/entropy_hftmac/EntropyHftMac.s"
 	@echo "... src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.o"
 	@echo "... src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.i"
 	@echo "... src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.s"

@@ -180,21 +180,25 @@ int main() {
     assert(!pipelines.empty());
     assert(hft_compressor::findPipeline("std.zstd_jsonl_blocks_v1") != nullptr);
     assert(hft_compressor::findPipeline("std.raw_jsonl_blocks_v1") != nullptr);
-    assert(hft_compressor::findPipeline("trade.hftmac_varint_v1") != nullptr);
-    assert(hft_compressor::findPipeline("bookticker.hftmac_varint_v1") != nullptr);
-    assert(hft_compressor::findPipeline("depth.hftmac_varint_v1") != nullptr);
-    assert(hft_compressor::findPipeline("trade.hftmac_raw_binary_v1") != nullptr);
-    assert(hft_compressor::findPipeline("bookticker.hftmac_raw_binary_v1") != nullptr);
-    assert(hft_compressor::findPipeline("depth.hftmac_raw_binary_v1") != nullptr);
-    assert(hft_compressor::findPipeline("trade.hftmac_ac16_ctx8_v1") != nullptr);
-    assert(hft_compressor::findPipeline("custom.ac_bin16_ctx8_v1") != nullptr);
+    assert(hft_compressor::findPipeline("trade.hftmac_varint_v1") == nullptr);
+    assert(hft_compressor::findPipeline("bookticker.hftmac_varint_v1") == nullptr);
+    assert(hft_compressor::findPipeline("depth.hftmac_varint_v1") == nullptr);
+    assert(hft_compressor::findPipeline("trade.hftmac_raw_binary_v1") == nullptr);
+    assert(hft_compressor::findPipeline("bookticker.hftmac_raw_binary_v1") == nullptr);
+    assert(hft_compressor::findPipeline("depth.hftmac_raw_binary_v1") == nullptr);
+    assert(hft_compressor::findPipeline("trade.hftmac_ac16_ctx8_v1") == nullptr);
+    assert(hft_compressor::findPipeline("custom.ac_bin16_ctx8_v1") == nullptr);
     assert(hft_compressor::findPipeline("hftmac.trades_grouped_delta_qtydict_math_v2") == nullptr);
     assert(hft_compressor::findPipeline("hftmac.trades_grouped_delta_qtydict_math_v3") != nullptr);
-    assert(hft_compressor::findPipeline("hftmac.trades_grouped_delta_qtydict_v1") != nullptr);
-    assert(hft_compressor::findPipeline("hftmac.bookticker_delta_mask_v1") != nullptr);
+    assert(hft_compressor::findPipeline("hftmac.trades_grouped_delta_qtydict_v1") == nullptr);
+    assert(hft_compressor::findPipeline("hftmac.bookticker_delta_mask_v1") == nullptr);
     assert(hft_compressor::findPipeline("hftmac.bookticker_delta_mask_v2") != nullptr);
-    assert(hft_compressor::findPipeline("hftmac.depth_ladder_offset_v1") != nullptr);
+    assert(hft_compressor::findPipeline("hftmac.depth_ladder_offset_v1") == nullptr);
+    assert(hft_compressor::findPipeline("hftmac.depth_ladder_offset_v2") == nullptr);
     assert(hft_compressor::findPipeline("hftmac.depth_ladder_offset_v3") != nullptr);
+    assert(hft_compressor::findPipeline("hftmac.trades_grouped_delta_qtydict_ac16_ctx8_v1") != nullptr);
+    assert(hft_compressor::findPipeline("hftmac.bookticker_delta_mask_range_byte_ctx8_v1") != nullptr);
+    assert(hft_compressor::findPipeline("hftmac.depth_ladder_offset_rans_byte_static_v1") != nullptr);
     assert(hft_compressor::findPipeline("missing.pipeline") == nullptr);
 
     const auto dir = fs::temp_directory_path() / "hft_compressor_tests";
@@ -202,8 +206,6 @@ int main() {
     const auto input = dir / "trades.jsonl";
     writeFile(input, "[1,2,1,100]\n[2,3,0,200]\n");
 
-    runNotImplementedPipelineCase("trade.hftmac_varint_v1", input, dir);
-    runNotImplementedPipelineCase("trade.hftmac_raw_binary_v1", input, dir);
 
     const auto spacedHftMacInput = dir / "hftmac_spaced" / "trades.jsonl";
     fs::create_directories(spacedHftMacInput.parent_path());
@@ -211,7 +213,7 @@ int main() {
     hft_compressor::CompressionRequest spacedHftMacRequest{};
     spacedHftMacRequest.inputPath = spacedHftMacInput;
     spacedHftMacRequest.outputRoot = dir / "hftmac_spaced_out";
-    spacedHftMacRequest.pipelineId = "hftmac.trades_grouped_delta_qtydict_v1";
+    spacedHftMacRequest.pipelineId = "hftmac.trades_grouped_delta_qtydict_math_v3";
     assert(hft_compressor::isOk(hft_compressor::compress(spacedHftMacRequest).status));
 
     hft_compressor::CompressionRequest tradeMathV3Request{};
@@ -236,28 +238,13 @@ int main() {
     })));
     assert(tradeMathV3Decoded == "[1,2,1,100]\n[2,3,0,200]\n");
 
-    hft_compressor::CompressionRequest tradeV1Request{};
-    tradeV1Request.inputPath = input;
-    tradeV1Request.outputRoot = dir / "trade_v1_out";
-    tradeV1Request.pipelineId = "hftmac.trades_grouped_delta_qtydict_v1";
-    const auto tradeV1Result = hft_compressor::compress(tradeV1Request);
-    assert(hft_compressor::isOk(tradeV1Result.status));
-    assert(tradeV1Result.roundtripOk);
-    hft_compressor::ReplayArtifactRequest tradeV1ArtifactRequest{};
-    tradeV1ArtifactRequest.compressedRoot = tradeV1Request.outputRoot;
-    tradeV1ArtifactRequest.sessionDir = input.parent_path();
-    tradeV1ArtifactRequest.streamType = hft_compressor::StreamType::Trades;
-    tradeV1ArtifactRequest.preferredPipelineId = "hftmac.trades_grouped_delta_qtydict_v1";
-    const auto tradeV1Artifact = hft_compressor::discoverReplayArtifact(tradeV1ArtifactRequest);
-    assert(hft_compressor::isOk(tradeV1Artifact.status));
-    assert(tradeV1Artifact.formatId == "hftmac.trades_grouped_delta_qtydict.v1");
 
     const auto bookMathInput = dir / "bookticker.jsonl";
     writeFile(bookMathInput, "[100,10,110,20,1000]\n[100,9,110,20,1001]\n[101,9,111,22,1001]\n");
     hft_compressor::CompressionRequest bookMathRequest{};
     bookMathRequest.inputPath = bookMathInput;
     bookMathRequest.outputRoot = dir / "book_math_out";
-    bookMathRequest.pipelineId = "hftmac.bookticker_delta_mask_v1";
+    bookMathRequest.pipelineId = "hftmac.bookticker_delta_mask_v2";
     const auto bookMathResult = hft_compressor::compress(bookMathRequest);
     assert(hft_compressor::isOk(bookMathResult.status));
     assert(bookMathResult.roundtripOk);
@@ -265,26 +252,18 @@ int main() {
     bookMathArtifactRequest.compressedRoot = bookMathRequest.outputRoot;
     bookMathArtifactRequest.sessionDir = bookMathInput.parent_path();
     bookMathArtifactRequest.streamType = hft_compressor::StreamType::BookTicker;
-    bookMathArtifactRequest.preferredPipelineId = "hftmac.bookticker_delta_mask_v1";
+    bookMathArtifactRequest.preferredPipelineId = "hftmac.bookticker_delta_mask_v2";
     const auto bookMathArtifact = hft_compressor::discoverReplayArtifact(bookMathArtifactRequest);
     assert(hft_compressor::isOk(bookMathArtifact.status));
-    assert(bookMathArtifact.formatId == "hftmac.bookticker_delta_mask.v1");
+    assert(bookMathArtifact.formatId == "hftmac.bookticker_delta_mask.v2");
 
-    hft_compressor::CompressionRequest bookV2Request{};
-    bookV2Request.inputPath = bookMathInput;
-    bookV2Request.outputRoot = dir / "book_math_v2_out";
-    bookV2Request.pipelineId = "hftmac.bookticker_delta_mask_v2";
-    const auto bookV2Result = hft_compressor::compress(bookV2Request);
-    assert(hft_compressor::isOk(bookV2Result.status));
-    assert(bookV2Result.roundtripOk);
-    assert(bookV2Result.outputBytes < bookMathResult.outputBytes);
 
     const auto depthMathInput = dir / "depth.jsonl";
     writeFile(depthMathInput, "[[100,10,0],[110,20,1],1000]\n[[100,9,0],[111,22,1],1001]\n[[100,0,0],[99,7,0],1002]\n");
     hft_compressor::CompressionRequest depthMathRequest{};
     depthMathRequest.inputPath = depthMathInput;
     depthMathRequest.outputRoot = dir / "depth_math_out";
-    depthMathRequest.pipelineId = "hftmac.depth_ladder_offset_v1";
+    depthMathRequest.pipelineId = "hftmac.depth_ladder_offset_v3";
     const auto depthMathResult = hft_compressor::compress(depthMathRequest);
     assert(hft_compressor::isOk(depthMathResult.status));
     assert(depthMathResult.roundtripOk);
@@ -292,17 +271,39 @@ int main() {
     depthMathArtifactRequest.compressedRoot = depthMathRequest.outputRoot;
     depthMathArtifactRequest.sessionDir = depthMathInput.parent_path();
     depthMathArtifactRequest.streamType = hft_compressor::StreamType::Depth;
-    depthMathArtifactRequest.preferredPipelineId = "hftmac.depth_ladder_offset_v1";
+    depthMathArtifactRequest.preferredPipelineId = "hftmac.depth_ladder_offset_v3";
     const auto depthMathArtifact = hft_compressor::discoverReplayArtifact(depthMathArtifactRequest);
     assert(hft_compressor::isOk(depthMathArtifact.status));
-    assert(depthMathArtifact.formatId == "hftmac.depth_ladder_offset.v1");
-    hft_compressor::CompressionRequest depthV3Request{};
-    depthV3Request.inputPath = depthMathInput;
-    depthV3Request.outputRoot = dir / "depth_math_v3_out";
-    depthV3Request.pipelineId = "hftmac.depth_ladder_offset_v3";
-    const auto depthV3Result = hft_compressor::compress(depthV3Request);
-    assert(hft_compressor::isOk(depthV3Result.status));
-    assert(depthV3Result.roundtripOk);
+    assert(depthMathArtifact.formatId == "hftmac.depth_ladder_offset.v3");
+    const auto runEntropyCase = [&](const fs::path& path, const char* pipelineId, hft_compressor::StreamType streamType, const char* expected) {
+        hft_compressor::CompressionRequest request{};
+        request.inputPath = path;
+        request.outputRoot = dir / "entropy_out";
+        request.pipelineId = pipelineId;
+        const auto result = hft_compressor::compress(request);
+        assert(hft_compressor::isOk(result.status));
+        assert(result.roundtripOk);
+        assert(result.entropy == expected);
+        hft_compressor::ReplayArtifactRequest artifactRequest{};
+        artifactRequest.compressedRoot = request.outputRoot;
+        artifactRequest.sessionDir = path.parent_path();
+        artifactRequest.streamType = streamType;
+        artifactRequest.preferredPipelineId = pipelineId;
+        const auto artifact = hft_compressor::discoverReplayArtifact(artifactRequest);
+        assert(hft_compressor::isOk(artifact.status));
+        assert(artifact.found);
+        std::string decoded;
+        assert(hft_compressor::isOk(hft_compressor::decodeReplayArtifactJsonl(artifact, [&decoded](std::span<const std::uint8_t> block) {
+            decoded.append(reinterpret_cast<const char*>(block.data()), block.size());
+            return true;
+        })));
+        std::ifstream original(path, std::ios::binary);
+        const std::string originalText((std::istreambuf_iterator<char>(original)), std::istreambuf_iterator<char>());
+        assert(decoded == originalText);
+    };
+    runEntropyCase(input, "hftmac.trades_grouped_delta_qtydict_ac16_ctx8_v1", hft_compressor::StreamType::Trades, "ac16_ctx8");
+    runEntropyCase(bookMathInput, "hftmac.bookticker_delta_mask_range_byte_ctx8_v1", hft_compressor::StreamType::BookTicker, "range_byte_ctx8");
+    runEntropyCase(depthMathInput, "hftmac.depth_ladder_offset_rans_byte_static_v1", hft_compressor::StreamType::Depth, "rans_byte_static");
     hft_compressor::CompressionRequest missingPipeline{};
     missingPipeline.inputPath = input;
     missingPipeline.pipelineId = "missing.pipeline";
@@ -313,8 +314,8 @@ int main() {
     placeholder.outputRoot = dir / "placeholder_output";
     placeholder.pipelineId = "custom.ac_bin16_ctx8_v1";
     const auto placeholderResult = hft_compressor::compress(placeholder);
-    assert(placeholderResult.status == hft_compressor::Status::NotImplemented);
-    assert(placeholderResult.pipelineId == "custom.ac_bin16_ctx8_v1");
+    assert(placeholderResult.status == hft_compressor::Status::UnsupportedPipeline);
+
     assert(!fs::exists(placeholder.outputRoot));
 
     hft_compressor::CompressionRequest rawRequest{};
@@ -493,7 +494,7 @@ int main() {
     hftc_decoder_close(cDecoder);
 
     artifactRequest.preferredPipelineId = "custom.rans_ctx8_v1";
-    assert(hft_compressor::discoverReplayArtifact(artifactRequest).status == hft_compressor::Status::NotImplemented);
+    assert(hft_compressor::discoverReplayArtifact(artifactRequest).status == hft_compressor::Status::UnsupportedPipeline);
     artifactRequest.preferredPipelineId.clear();
     artifactRequest.sessionDir.clear();
     artifactRequest.sessionId = "missing_session";
@@ -662,5 +663,11 @@ int main() {
 #endif
     return 0;
 }
+
+
+
+
+
+
 
 
