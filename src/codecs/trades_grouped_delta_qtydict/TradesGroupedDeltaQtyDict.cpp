@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <simdjson.h>
+
 #include "common/CompressionInternals.hpp"
 #include "common/timing.hpp"
 #include "container/hfc/format.hpp"
@@ -25,6 +27,10 @@ constexpr std::uint32_t kChunkMagic = 0x4b484354u; // TCHK
 constexpr std::uint16_t kVersionV3 = 3u;
 constexpr std::size_t kFileHeaderBytes = 96u;
 constexpr std::size_t kChunkHeaderBytes = 160u;
+
+bool isSimdjsonEmpty(simdjson::error_code error) noexcept {
+    return error == simdjson::EMPTY || static_cast<int>(error) == 12;
+}
 constexpr std::uint32_t kDefaultChunkRecords = 16u * 1024u;
 constexpr std::uint32_t kHotQtyCount = 64u;
 constexpr std::uint32_t kMaxHotQtyCount = 128u;
@@ -429,22 +435,34 @@ bool parseTradeLine(std::string_view line, Trade& out) noexcept {
 }
 
 bool parseTrades(std::span<const std::uint8_t> input, std::vector<Trade>& out) {
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded{reinterpret_cast<const char*>(input.data()), input.size()};
+    auto docs = parser.parse_many(padded.data(), padded.size(), padded.size());
     std::int64_t previousTs = 0;
     bool havePrevious = false;
-    std::size_t lineStart = 0;
-    while (lineStart < input.size()) {
-        std::size_t lineEnd = lineStart;
-        while (lineEnd < input.size() && input[lineEnd] != static_cast<std::uint8_t>('\n')) ++lineEnd;
-        std::string_view line{reinterpret_cast<const char*>(input.data() + lineStart), lineEnd - lineStart};
-        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
-        if (line.empty()) return false;
+    for (auto docResult : docs) {
+        simdjson::dom::element doc;
+        const auto docError = docResult.get(doc);
+        if (isSimdjsonEmpty(docError)) continue;
+        if (docError != simdjson::SUCCESS || !doc.is_array()) return false;
+        simdjson::dom::array values;
+        if (doc.get_array().get(values) != simdjson::SUCCESS || values.size() != 4u) return false;
         Trade trade{};
-        if (!parseTradeLine(line, trade)) return false;
+        std::size_t index = 0;
+        for (auto value : values) {
+            std::int64_t parsed = 0;
+            if (value.get_int64().get(parsed) != simdjson::SUCCESS) return false;
+            if (index == 0u) trade.price = parsed;
+            else if (index == 1u) trade.qty = parsed;
+            else if (index == 2u) trade.side = parsed;
+            else trade.tsNs = parsed;
+            ++index;
+        }
+        if (trade.price <= 0 || trade.qty <= 0 || (trade.side != 0 && trade.side != 1)) return false;
         if (havePrevious && trade.tsNs < previousTs) return false;
         previousTs = trade.tsNs;
         havePrevious = true;
         out.push_back(trade);
-        lineStart = lineEnd + (lineEnd < input.size() ? 1u : 0u);
     }
     return !out.empty();
 }
@@ -1053,7 +1071,9 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const Pipe
     info.status = Status::Ok;
     info.found = true;
     info.path = path;
-    info.formatId = "hftmac.trades_grouped_delta_qtydict.math.v3";
+    info.formatId = pipeline.id == std::string_view{"hftmac.trades_grouped_delta_qtydict_v1"}
+        ? "hftmac.trades_grouped_delta_qtydict.v1"
+        : "hftmac.trades_grouped_delta_qtydict.math.v3";
     info.pipelineId = std::string{pipeline.id};
     info.transform = std::string{pipeline.transform};
     info.entropy = std::string{pipeline.entropy};
@@ -1155,7 +1175,7 @@ Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBloc
 
     std::ostringstream out;
     out << "{\n"
-        << "  \"pipeline_id\": \"hftmac.trades_grouped_delta_qtydict_math_v3\",\n"
+        << "  \"pipeline_id\": \"hftmac.trades_grouped_delta_qtydict_v1\",\n"
         << "  \"version\": " << header.version << ",\n"
         << "  \"record_count\": " << header.recordCount << ",\n"
         << "  \"chunk_count\": " << header.chunkCount << ",\n"

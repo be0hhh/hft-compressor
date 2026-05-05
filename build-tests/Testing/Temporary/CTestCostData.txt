@@ -1,2 +1,2 @@
-hft-compressor-tests 2 0.00827426
+hft-compressor-tests 13 0.00116617
 ---

@@ -16,7 +16,7 @@
 namespace hft_compressor::pipelines {
 namespace {
 
-constexpr std::array<PipelineBackend, 10> kBackends{{
+constexpr std::array<PipelineBackend, 13> kBackends{{
     {"std.zstd_jsonl_blocks_v1",
      "hfc.zstd_jsonl_blocks_v1",
      codecs::zstd_jsonl_blocks::compress,
@@ -60,8 +60,20 @@ constexpr std::array<PipelineBackend, 10> kBackends{{
      codecs::trades_grouped_delta_qtydict::inspectArtifact,
      codecs::trades_grouped_delta_qtydict::decodeFile,
      codecs::trades_grouped_delta_qtydict::decode},
+    {"hftmac.trades_grouped_delta_qtydict_v1",
+     "hftmac.trades_grouped_delta_qtydict.v1",
+     codecs::trades_grouped_delta_qtydict::compress,
+     codecs::trades_grouped_delta_qtydict::inspectArtifact,
+     codecs::trades_grouped_delta_qtydict::decodeFile,
+     codecs::trades_grouped_delta_qtydict::decode},
     {"hftmac.bookticker_delta_mask_v1",
      "hftmac.bookticker_delta_mask.v1",
+     codecs::bookticker_delta_mask::compress,
+     codecs::bookticker_delta_mask::inspectArtifact,
+     codecs::bookticker_delta_mask::decodeFile,
+     codecs::bookticker_delta_mask::decode},
+    {"hftmac.bookticker_delta_mask_v2",
+     "hftmac.bookticker_delta_mask.v2",
      codecs::bookticker_delta_mask::compress,
      codecs::bookticker_delta_mask::inspectArtifact,
      codecs::bookticker_delta_mask::decodeFile,
@@ -74,6 +86,12 @@ constexpr std::array<PipelineBackend, 10> kBackends{{
      codecs::depth_ladder_offset::decode},
     {"hftmac.depth_ladder_offset_v2",
      "hftmac.depth_ladder_offset.v2",
+     codecs::depth_ladder_offset_v2::compress,
+     codecs::depth_ladder_offset_v2::inspectArtifact,
+     codecs::depth_ladder_offset_v2::decodeFile,
+     codecs::depth_ladder_offset_v2::decode},
+    {"hftmac.depth_ladder_offset_v3",
+     "hftmac.depth_ladder_offset.v3",
      codecs::depth_ladder_offset_v2::compress,
      codecs::depth_ladder_offset_v2::inspectArtifact,
      codecs::depth_ladder_offset_v2::decodeFile,

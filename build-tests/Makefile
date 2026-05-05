@@ -140,6 +140,19 @@ hft_compressor_core/fast:
 .PHONY : hft_compressor_core/fast
 
 #=============================================================================
+# Target rules for targets named hft-compressor
+
+# Build rule for target.
+hft-compressor: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 hft-compressor
+.PHONY : hft-compressor
+
+# fast build rule for target.
+hft-compressor/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft-compressor.dir/build.make CMakeFiles/hft-compressor.dir/build
+.PHONY : hft-compressor/fast
+
+#=============================================================================
 # Target rules for targets named hft-compressor-tests
 
 # Build rule for target.
@@ -176,6 +189,30 @@ src/c_api.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/c_api.cpp.s
 .PHONY : src/c_api.cpp.s
 
+src/codecs/bookticker_delta_mask/BookTickerDeltaMask.o: src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.o
+.PHONY : src/codecs/bookticker_delta_mask/BookTickerDeltaMask.o
+
+# target to build an object file
+src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.o
+.PHONY : src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.o
+
+src/codecs/bookticker_delta_mask/BookTickerDeltaMask.i: src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.i
+.PHONY : src/codecs/bookticker_delta_mask/BookTickerDeltaMask.i
+
+# target to preprocess a source file
+src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.i
+.PHONY : src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.i
+
+src/codecs/bookticker_delta_mask/BookTickerDeltaMask.s: src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.s
+.PHONY : src/codecs/bookticker_delta_mask/BookTickerDeltaMask.s
+
+# target to generate assembly for a file
+src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.s
+.PHONY : src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp.s
+
 src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.o: src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.cpp.o
 .PHONY : src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.o
 
@@ -200,6 +237,54 @@ src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.cpp.s
 .PHONY : src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.cpp.s
 
+src/codecs/depth_ladder_offset/DepthLadderOffset.o: src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.o
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffset.o
+
+# target to build an object file
+src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.o
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.o
+
+src/codecs/depth_ladder_offset/DepthLadderOffset.i: src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.i
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffset.i
+
+# target to preprocess a source file
+src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.i
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.i
+
+src/codecs/depth_ladder_offset/DepthLadderOffset.s: src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.s
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffset.s
+
+# target to generate assembly for a file
+src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.s
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffset.cpp.s
+
+src/codecs/depth_ladder_offset/DepthLadderOffsetV2.o: src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.o
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffsetV2.o
+
+# target to build an object file
+src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.o
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.o
+
+src/codecs/depth_ladder_offset/DepthLadderOffsetV2.i: src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.i
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffsetV2.i
+
+# target to preprocess a source file
+src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.i
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.i
+
+src/codecs/depth_ladder_offset/DepthLadderOffsetV2.s: src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.s
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffsetV2.s
+
+# target to generate assembly for a file
+src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.s
+.PHONY : src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp.s
+
 src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.o: src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.cpp.o
 .PHONY : src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.o
 
@@ -223,174 +308,6 @@ src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.s: src/codecs/gzip_jsonl_blocks/Gzi
 src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.cpp.s
 .PHONY : src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.cpp.s
-
-src/codecs/hftmac_common/HftMacCommon.o: src/codecs/hftmac_common/HftMacCommon.cpp.o
-.PHONY : src/codecs/hftmac_common/HftMacCommon.o
-
-# target to build an object file
-src/codecs/hftmac_common/HftMacCommon.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_common/HftMacCommon.cpp.o
-.PHONY : src/codecs/hftmac_common/HftMacCommon.cpp.o
-
-src/codecs/hftmac_common/HftMacCommon.i: src/codecs/hftmac_common/HftMacCommon.cpp.i
-.PHONY : src/codecs/hftmac_common/HftMacCommon.i
-
-# target to preprocess a source file
-src/codecs/hftmac_common/HftMacCommon.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_common/HftMacCommon.cpp.i
-.PHONY : src/codecs/hftmac_common/HftMacCommon.cpp.i
-
-src/codecs/hftmac_common/HftMacCommon.s: src/codecs/hftmac_common/HftMacCommon.cpp.s
-.PHONY : src/codecs/hftmac_common/HftMacCommon.s
-
-# target to generate assembly for a file
-src/codecs/hftmac_common/HftMacCommon.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_common/HftMacCommon.cpp.s
-.PHONY : src/codecs/hftmac_common/HftMacCommon.cpp.s
-
-src/codecs/hftmac_raw_binary/BookTicker.o: src/codecs/hftmac_raw_binary/BookTicker.cpp.o
-.PHONY : src/codecs/hftmac_raw_binary/BookTicker.o
-
-# target to build an object file
-src/codecs/hftmac_raw_binary/BookTicker.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_raw_binary/BookTicker.cpp.o
-.PHONY : src/codecs/hftmac_raw_binary/BookTicker.cpp.o
-
-src/codecs/hftmac_raw_binary/BookTicker.i: src/codecs/hftmac_raw_binary/BookTicker.cpp.i
-.PHONY : src/codecs/hftmac_raw_binary/BookTicker.i
-
-# target to preprocess a source file
-src/codecs/hftmac_raw_binary/BookTicker.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_raw_binary/BookTicker.cpp.i
-.PHONY : src/codecs/hftmac_raw_binary/BookTicker.cpp.i
-
-src/codecs/hftmac_raw_binary/BookTicker.s: src/codecs/hftmac_raw_binary/BookTicker.cpp.s
-.PHONY : src/codecs/hftmac_raw_binary/BookTicker.s
-
-# target to generate assembly for a file
-src/codecs/hftmac_raw_binary/BookTicker.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_raw_binary/BookTicker.cpp.s
-.PHONY : src/codecs/hftmac_raw_binary/BookTicker.cpp.s
-
-src/codecs/hftmac_raw_binary/Depth.o: src/codecs/hftmac_raw_binary/Depth.cpp.o
-.PHONY : src/codecs/hftmac_raw_binary/Depth.o
-
-# target to build an object file
-src/codecs/hftmac_raw_binary/Depth.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_raw_binary/Depth.cpp.o
-.PHONY : src/codecs/hftmac_raw_binary/Depth.cpp.o
-
-src/codecs/hftmac_raw_binary/Depth.i: src/codecs/hftmac_raw_binary/Depth.cpp.i
-.PHONY : src/codecs/hftmac_raw_binary/Depth.i
-
-# target to preprocess a source file
-src/codecs/hftmac_raw_binary/Depth.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_raw_binary/Depth.cpp.i
-.PHONY : src/codecs/hftmac_raw_binary/Depth.cpp.i
-
-src/codecs/hftmac_raw_binary/Depth.s: src/codecs/hftmac_raw_binary/Depth.cpp.s
-.PHONY : src/codecs/hftmac_raw_binary/Depth.s
-
-# target to generate assembly for a file
-src/codecs/hftmac_raw_binary/Depth.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_raw_binary/Depth.cpp.s
-.PHONY : src/codecs/hftmac_raw_binary/Depth.cpp.s
-
-src/codecs/hftmac_raw_binary/Trade.o: src/codecs/hftmac_raw_binary/Trade.cpp.o
-.PHONY : src/codecs/hftmac_raw_binary/Trade.o
-
-# target to build an object file
-src/codecs/hftmac_raw_binary/Trade.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_raw_binary/Trade.cpp.o
-.PHONY : src/codecs/hftmac_raw_binary/Trade.cpp.o
-
-src/codecs/hftmac_raw_binary/Trade.i: src/codecs/hftmac_raw_binary/Trade.cpp.i
-.PHONY : src/codecs/hftmac_raw_binary/Trade.i
-
-# target to preprocess a source file
-src/codecs/hftmac_raw_binary/Trade.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_raw_binary/Trade.cpp.i
-.PHONY : src/codecs/hftmac_raw_binary/Trade.cpp.i
-
-src/codecs/hftmac_raw_binary/Trade.s: src/codecs/hftmac_raw_binary/Trade.cpp.s
-.PHONY : src/codecs/hftmac_raw_binary/Trade.s
-
-# target to generate assembly for a file
-src/codecs/hftmac_raw_binary/Trade.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_raw_binary/Trade.cpp.s
-.PHONY : src/codecs/hftmac_raw_binary/Trade.cpp.s
-
-src/codecs/hftmac_varint/BookTicker.o: src/codecs/hftmac_varint/BookTicker.cpp.o
-.PHONY : src/codecs/hftmac_varint/BookTicker.o
-
-# target to build an object file
-src/codecs/hftmac_varint/BookTicker.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_varint/BookTicker.cpp.o
-.PHONY : src/codecs/hftmac_varint/BookTicker.cpp.o
-
-src/codecs/hftmac_varint/BookTicker.i: src/codecs/hftmac_varint/BookTicker.cpp.i
-.PHONY : src/codecs/hftmac_varint/BookTicker.i
-
-# target to preprocess a source file
-src/codecs/hftmac_varint/BookTicker.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_varint/BookTicker.cpp.i
-.PHONY : src/codecs/hftmac_varint/BookTicker.cpp.i
-
-src/codecs/hftmac_varint/BookTicker.s: src/codecs/hftmac_varint/BookTicker.cpp.s
-.PHONY : src/codecs/hftmac_varint/BookTicker.s
-
-# target to generate assembly for a file
-src/codecs/hftmac_varint/BookTicker.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_varint/BookTicker.cpp.s
-.PHONY : src/codecs/hftmac_varint/BookTicker.cpp.s
-
-src/codecs/hftmac_varint/Depth.o: src/codecs/hftmac_varint/Depth.cpp.o
-.PHONY : src/codecs/hftmac_varint/Depth.o
-
-# target to build an object file
-src/codecs/hftmac_varint/Depth.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_varint/Depth.cpp.o
-.PHONY : src/codecs/hftmac_varint/Depth.cpp.o
-
-src/codecs/hftmac_varint/Depth.i: src/codecs/hftmac_varint/Depth.cpp.i
-.PHONY : src/codecs/hftmac_varint/Depth.i
-
-# target to preprocess a source file
-src/codecs/hftmac_varint/Depth.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_varint/Depth.cpp.i
-.PHONY : src/codecs/hftmac_varint/Depth.cpp.i
-
-src/codecs/hftmac_varint/Depth.s: src/codecs/hftmac_varint/Depth.cpp.s
-.PHONY : src/codecs/hftmac_varint/Depth.s
-
-# target to generate assembly for a file
-src/codecs/hftmac_varint/Depth.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_varint/Depth.cpp.s
-.PHONY : src/codecs/hftmac_varint/Depth.cpp.s
-
-src/codecs/hftmac_varint/Trade.o: src/codecs/hftmac_varint/Trade.cpp.o
-.PHONY : src/codecs/hftmac_varint/Trade.o
-
-# target to build an object file
-src/codecs/hftmac_varint/Trade.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_varint/Trade.cpp.o
-.PHONY : src/codecs/hftmac_varint/Trade.cpp.o
-
-src/codecs/hftmac_varint/Trade.i: src/codecs/hftmac_varint/Trade.cpp.i
-.PHONY : src/codecs/hftmac_varint/Trade.i
-
-# target to preprocess a source file
-src/codecs/hftmac_varint/Trade.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_varint/Trade.cpp.i
-.PHONY : src/codecs/hftmac_varint/Trade.cpp.i
-
-src/codecs/hftmac_varint/Trade.s: src/codecs/hftmac_varint/Trade.cpp.s
-.PHONY : src/codecs/hftmac_varint/Trade.s
-
-# target to generate assembly for a file
-src/codecs/hftmac_varint/Trade.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/hftmac_varint/Trade.cpp.s
-.PHONY : src/codecs/hftmac_varint/Trade.cpp.s
 
 src/codecs/lz4_jsonl_blocks/Lz4JsonlBlocks.o: src/codecs/lz4_jsonl_blocks/Lz4JsonlBlocks.cpp.o
 .PHONY : src/codecs/lz4_jsonl_blocks/Lz4JsonlBlocks.o
@@ -463,6 +380,30 @@ src/codecs/standard_jsonl_blocks/StandardJsonlBlocks.s: src/codecs/standard_json
 src/codecs/standard_jsonl_blocks/StandardJsonlBlocks.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/standard_jsonl_blocks/StandardJsonlBlocks.cpp.s
 .PHONY : src/codecs/standard_jsonl_blocks/StandardJsonlBlocks.cpp.s
+
+src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.o: src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.o
+.PHONY : src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.o
+
+# target to build an object file
+src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.o
+.PHONY : src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.o
+
+src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.i: src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.i
+.PHONY : src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.i
+
+# target to preprocess a source file
+src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.i
+.PHONY : src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.i
+
+src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.s: src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.s
+.PHONY : src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.s
+
+# target to generate assembly for a file
+src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.s
+.PHONY : src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp.s
 
 src/codecs/xz_jsonl_blocks/XzJsonlBlocks.o: src/codecs/xz_jsonl_blocks/XzJsonlBlocks.cpp.o
 .PHONY : src/codecs/xz_jsonl_blocks/XzJsonlBlocks.o
@@ -631,6 +572,30 @@ src/decoder.s: src/decoder.cpp.s
 src/decoder.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft_compressor_core.dir/build.make CMakeFiles/hft_compressor_core.dir/src/decoder.cpp.s
 .PHONY : src/decoder.cpp.s
+
+src/main.o: src/main.cpp.o
+.PHONY : src/main.o
+
+# target to build an object file
+src/main.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft-compressor.dir/build.make CMakeFiles/hft-compressor.dir/src/main.cpp.o
+.PHONY : src/main.cpp.o
+
+src/main.i: src/main.cpp.i
+.PHONY : src/main.i
+
+# target to preprocess a source file
+src/main.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft-compressor.dir/build.make CMakeFiles/hft-compressor.dir/src/main.cpp.i
+.PHONY : src/main.cpp.i
+
+src/main.s: src/main.cpp.s
+.PHONY : src/main.s
+
+# target to generate assembly for a file
+src/main.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/hft-compressor.dir/build.make CMakeFiles/hft-compressor.dir/src/main.cpp.s
+.PHONY : src/main.cpp.s
 
 src/metrics.o: src/metrics.cpp.o
 .PHONY : src/metrics.o
@@ -809,38 +774,27 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... test"
+	@echo "... hft-compressor"
 	@echo "... hft-compressor-tests"
 	@echo "... hft_compressor_core"
 	@echo "... src/c_api.o"
 	@echo "... src/c_api.i"
 	@echo "... src/c_api.s"
+	@echo "... src/codecs/bookticker_delta_mask/BookTickerDeltaMask.o"
+	@echo "... src/codecs/bookticker_delta_mask/BookTickerDeltaMask.i"
+	@echo "... src/codecs/bookticker_delta_mask/BookTickerDeltaMask.s"
 	@echo "... src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.o"
 	@echo "... src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.i"
 	@echo "... src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.s"
+	@echo "... src/codecs/depth_ladder_offset/DepthLadderOffset.o"
+	@echo "... src/codecs/depth_ladder_offset/DepthLadderOffset.i"
+	@echo "... src/codecs/depth_ladder_offset/DepthLadderOffset.s"
+	@echo "... src/codecs/depth_ladder_offset/DepthLadderOffsetV2.o"
+	@echo "... src/codecs/depth_ladder_offset/DepthLadderOffsetV2.i"
+	@echo "... src/codecs/depth_ladder_offset/DepthLadderOffsetV2.s"
 	@echo "... src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.o"
 	@echo "... src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.i"
 	@echo "... src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.s"
-	@echo "... src/codecs/hftmac_common/HftMacCommon.o"
-	@echo "... src/codecs/hftmac_common/HftMacCommon.i"
-	@echo "... src/codecs/hftmac_common/HftMacCommon.s"
-	@echo "... src/codecs/hftmac_raw_binary/BookTicker.o"
-	@echo "... src/codecs/hftmac_raw_binary/BookTicker.i"
-	@echo "... src/codecs/hftmac_raw_binary/BookTicker.s"
-	@echo "... src/codecs/hftmac_raw_binary/Depth.o"
-	@echo "... src/codecs/hftmac_raw_binary/Depth.i"
-	@echo "... src/codecs/hftmac_raw_binary/Depth.s"
-	@echo "... src/codecs/hftmac_raw_binary/Trade.o"
-	@echo "... src/codecs/hftmac_raw_binary/Trade.i"
-	@echo "... src/codecs/hftmac_raw_binary/Trade.s"
-	@echo "... src/codecs/hftmac_varint/BookTicker.o"
-	@echo "... src/codecs/hftmac_varint/BookTicker.i"
-	@echo "... src/codecs/hftmac_varint/BookTicker.s"
-	@echo "... src/codecs/hftmac_varint/Depth.o"
-	@echo "... src/codecs/hftmac_varint/Depth.i"
-	@echo "... src/codecs/hftmac_varint/Depth.s"
-	@echo "... src/codecs/hftmac_varint/Trade.o"
-	@echo "... src/codecs/hftmac_varint/Trade.i"
-	@echo "... src/codecs/hftmac_varint/Trade.s"
 	@echo "... src/codecs/lz4_jsonl_blocks/Lz4JsonlBlocks.o"
 	@echo "... src/codecs/lz4_jsonl_blocks/Lz4JsonlBlocks.i"
 	@echo "... src/codecs/lz4_jsonl_blocks/Lz4JsonlBlocks.s"
@@ -850,6 +804,9 @@ help:
 	@echo "... src/codecs/standard_jsonl_blocks/StandardJsonlBlocks.o"
 	@echo "... src/codecs/standard_jsonl_blocks/StandardJsonlBlocks.i"
 	@echo "... src/codecs/standard_jsonl_blocks/StandardJsonlBlocks.s"
+	@echo "... src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.o"
+	@echo "... src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.i"
+	@echo "... src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.s"
 	@echo "... src/codecs/xz_jsonl_blocks/XzJsonlBlocks.o"
 	@echo "... src/codecs/xz_jsonl_blocks/XzJsonlBlocks.i"
 	@echo "... src/codecs/xz_jsonl_blocks/XzJsonlBlocks.s"
@@ -871,6 +828,9 @@ help:
 	@echo "... src/decoder.o"
 	@echo "... src/decoder.i"
 	@echo "... src/decoder.s"
+	@echo "... src/main.o"
+	@echo "... src/main.i"
+	@echo "... src/main.s"
 	@echo "... src/metrics.o"
 	@echo "... src/metrics.i"
 	@echo "... src/metrics.s"

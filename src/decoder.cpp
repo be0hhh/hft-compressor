@@ -487,7 +487,7 @@ Status inspectCompressedArtifact(const std::filesystem::path& path,
                                  std::string_view view,
                                  const DecodedBlockCallback& onBlock) noexcept {
     if (path.empty() || pipelineId.empty() || view.empty() || !onBlock) return Status::InvalidArgument;
-    if (pipelineId == "hftmac.trades_grouped_delta_qtydict_math_v3") {
+    if (pipelineId == "hftmac.trades_grouped_delta_qtydict_math_v3" || pipelineId == "hftmac.trades_grouped_delta_qtydict_v1") {
         if (view == "canonical-json" || view == "canonical-jsonl") {
             return codecs::trades_grouped_delta_qtydict::decodeFile(path, onBlock);
         }
@@ -501,7 +501,7 @@ Status inspectCompressedArtifact(const std::filesystem::path& path,
             return codecs::trades_grouped_delta_qtydict::inspectStatsJsonFile(path, onBlock);
         }
     }
-    if (pipelineId == "hftmac.bookticker_delta_mask_v1") {
+    if (pipelineId == "hftmac.bookticker_delta_mask_v1" || pipelineId == "hftmac.bookticker_delta_mask_v2") {
         if (view == "canonical-json" || view == "canonical-jsonl") return codecs::bookticker_delta_mask::decodeFile(path, onBlock);
         if (view == "encoded-json") return codecs::bookticker_delta_mask::inspectEncodedJsonFile(path, onBlock);
         if (view == "encoded-binary") return codecs::bookticker_delta_mask::inspectEncodedBinaryFile(path, onBlock);
@@ -513,7 +513,7 @@ Status inspectCompressedArtifact(const std::filesystem::path& path,
         if (view == "encoded-binary") return codecs::depth_ladder_offset::inspectEncodedBinaryFile(path, onBlock);
         if (view == "stats") return codecs::depth_ladder_offset::inspectStatsJsonFile(path, onBlock);
     }
-    if (pipelineId == "hftmac.depth_ladder_offset_v2") {
+    if (pipelineId == "hftmac.depth_ladder_offset_v2" || pipelineId == "hftmac.depth_ladder_offset_v3") {
         if (view == "canonical-json" || view == "canonical-jsonl") return codecs::depth_ladder_offset_v2::decodeFile(path, onBlock);
         if (view == "encoded-json") return codecs::depth_ladder_offset_v2::inspectEncodedJsonFile(path, onBlock);
         if (view == "encoded-binary") return codecs::depth_ladder_offset_v2::inspectEncodedBinaryFile(path, onBlock);

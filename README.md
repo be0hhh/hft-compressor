@@ -20,8 +20,11 @@ A pipeline describes:
 - entropy stage: zstd, lz4, brotli, xz, arithmetic coding, range coding, rANS
 - profile: live, archive, replay, or research
 
-Only `std.zstd_jsonl_blocks_v1` is implemented today. The other descriptors are
-intentional placeholders for the coursework benchmark matrix and return
+Implemented C++ pipelines currently include JSONL block baselines
+(`std.raw_jsonl_blocks_v1`, `std.zstd_jsonl_blocks_v1`, `std.lz4_jsonl_blocks_v1`,
+`std.brotli_jsonl_blocks_v1`, `std.xz_jsonl_blocks_v1`, `std.gzip_jsonl_blocks_v1`)
+and non-arithmetic HFT-MAC replay/research codecs for trades, bookticker, and
+depth. Arithmetic/rANS/range-coding descriptors are still planned and return
 `not_implemented` until their implementation is added.
 
 Current baseline output:

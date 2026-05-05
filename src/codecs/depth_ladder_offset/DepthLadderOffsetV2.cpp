@@ -10,6 +10,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <simdjson.h>
+
 #include "common/CompressionInternals.hpp"
 #include "common/timing.hpp"
 #include "hft_compressor/metrics.hpp"
@@ -18,15 +20,20 @@ namespace hft_compressor::codecs::depth_ladder_offset_v2 {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x32454443u; // CDE2
-constexpr std::uint16_t kVersion = 2u;
+constexpr std::uint16_t kVersionV2 = 2u;
+constexpr std::uint16_t kVersionV3 = 3u;
 constexpr std::size_t kHeaderBytes = 176u;
+
+bool isSimdjsonEmpty(simdjson::error_code error) noexcept {
+    return error == simdjson::EMPTY || static_cast<int>(error) == 12;
+}
 constexpr std::uint32_t kHotQtyCount = 64u;
 constexpr std::uint32_t kInspectBatchLimit = 128u;
 
 struct Level { std::int64_t price{0}, qty{0}, side{0}; };
 struct Batch { std::int64_t ts{0}; std::vector<Level> levels; };
 struct Header {
-    std::uint32_t magic{kMagic}; std::uint16_t version{kVersion}; std::uint16_t bidHotCount{0};
+    std::uint32_t magic{kMagic}; std::uint16_t version{kVersionV2}; std::uint16_t bidHotCount{0};
     std::uint64_t inputBytes{0}, outputBytes{0}, batchCount{0}, levelCount{0};
     std::int64_t timeScale{1}, priceScale{1}, qtyScale{1}, baseTsUnit{0};
     std::uint32_t hotQtyCount{0}, hotQtyBytes{0};
@@ -58,18 +65,47 @@ bool parseLine(std::string_view line, Batch& out) noexcept {
 }
 
 bool parseBatches(std::span<const std::uint8_t> input, std::vector<Batch>& out) {
-    std::int64_t previousTs = 0; bool havePrevious = false; std::size_t start = 0;
-    while (start < input.size()) {
-        std::size_t end = start;
-        while (end < input.size() && input[end] != static_cast<std::uint8_t>('\n')) ++end;
-        std::string_view line{reinterpret_cast<const char*>(input.data() + start), end - start};
-        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
-        if (line.empty()) return false;
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded{reinterpret_cast<const char*>(input.data()), input.size()};
+    auto docs = parser.parse_many(padded.data(), padded.size(), padded.size());
+    std::int64_t previousTs = 0;
+    bool havePrevious = false;
+    for (auto docResult : docs) {
+        simdjson::dom::element doc;
+        const auto docError = docResult.get(doc);
+        if (isSimdjsonEmpty(docError)) continue;
+        if (docError != simdjson::SUCCESS || !doc.is_array()) return false;
+        simdjson::dom::array values;
+        if (doc.get_array().get(values) != simdjson::SUCCESS || values.size() < 2u) return false;
         Batch batch{};
-        if (!parseLine(line, batch)) return false;
+        std::size_t index = 0;
+        const auto lastIndex = values.size() - 1u;
+        for (auto value : values) {
+            if (index == lastIndex) {
+                if (value.get_int64().get(batch.ts) != simdjson::SUCCESS) return false;
+            } else {
+                simdjson::dom::array levelValues;
+                if (value.get_array().get(levelValues) != simdjson::SUCCESS || levelValues.size() != 3u) return false;
+                Level level{};
+                std::size_t levelIndex = 0;
+                for (auto field : levelValues) {
+                    std::int64_t parsed = 0;
+                    if (field.get_int64().get(parsed) != simdjson::SUCCESS) return false;
+                    if (levelIndex == 0u) level.price = parsed;
+                    else if (levelIndex == 1u) level.qty = parsed;
+                    else level.side = parsed;
+                    ++levelIndex;
+                }
+                if (!validSide(level.side)) return false;
+                batch.levels.push_back(level);
+            }
+            ++index;
+        }
+        if (batch.levels.empty()) return false;
         if (havePrevious && batch.ts < previousTs) return false;
-        previousTs = batch.ts; havePrevious = true; out.push_back(std::move(batch));
-        start = end + (end < input.size() ? 1u : 0u);
+        previousTs = batch.ts;
+        havePrevious = true;
+        out.push_back(std::move(batch));
     }
     return !out.empty();
 }
@@ -138,7 +174,7 @@ bool readHeader(std::span<const std::uint8_t> data, Header& h) noexcept {
         && readLe(p, end, h.hotQtyCount) && readLe(p, end, h.hotQtyBytes) && readLe(p, end, h.batchBytes) && readLe(p, end, h.sideBytes) && readLe(p, end, h.priceModeBytes) && readLe(p, end, h.deleteBytes)
         && readLe(p, end, h.priceBytes) && readLe(p, end, h.qtyCodeBytes) && readLe(p, end, h.qtyEscapeBytes)
         && readLe(p, end, h.deleteCount) && readLe(p, end, h.qtyEscapeCount) && readLe(p, end, h.runModeBatchCount) && readLe(p, end, h.fallbackBatchCount) && readLe(p, end, h.offsetPriceCount) && readLe(p, end, h.absolutePriceCount)
-        && h.magic == kMagic && h.version == kVersion && h.hotQtyCount <= kHotQtyCount * 2u && h.bidHotCount <= h.hotQtyCount && h.hotQtyBytes == h.hotQtyCount * sizeof(std::int64_t);
+        && h.magic == kMagic && (h.version == kVersionV2 || h.version == kVersionV3) && h.hotQtyCount <= kHotQtyCount * 2u && h.bidHotCount <= h.hotQtyCount && h.hotQtyBytes == h.hotQtyCount * sizeof(std::int64_t);
 }
 
 bool take(std::span<const std::uint8_t> data, std::size_t& offset, std::uint32_t size, std::span<const std::uint8_t>& out) noexcept { if (offset + size > data.size()) return false; out = data.subspan(offset, size); offset += size; return true; }
@@ -185,7 +221,7 @@ Status decodeBytes(std::span<const std::uint8_t> data, std::string* jsonl, std::
     if (!take(data, offset, h.batchBytes, batchS) || !take(data, offset, h.sideBytes, sideS) || !take(data, offset, h.priceModeBytes, priceModeS) || !take(data, offset, h.deleteBytes, deleteS) || !take(data, offset, h.priceBytes, priceS) || !take(data, offset, h.qtyCodeBytes, codeS) || !take(data, offset, h.qtyEscapeBytes, escapeS) || offset != data.size()) return Status::CorruptData;
     const auto* batch = batchS.data(); const auto* batchEnd = batchS.data() + batchS.size(); const auto* price = priceS.data(); const auto* priceEnd = priceS.data() + priceS.size(); const auto* code = codeS.data(); const auto* codeEnd = codeS.data() + codeS.size(); const auto* escape = escapeS.data(); const auto* escapeEnd = escapeS.data() + escapeS.size();
     BitReader sideBits{sideS.data(), sideS.data() + sideS.size()}; BitReader deleteBits{deleteS.data(), deleteS.data() + deleteS.size()}; BookState state; std::int64_t ts = h.baseTsUnit;
-    if (encoded) { *encoded << "{\n  \"pipeline_id\": \"hftmac.depth_ladder_offset_v2\",\n  \"version\": 2,\n  \"batch_count\": " << h.batchCount << ",\n  \"hot_qty\": {\"bid\": ["; for (std::size_t i = 0; i < bidHot.size(); ++i) *encoded << (i ? ", " : "") << bidHot[i]; *encoded << "], \"ask\": ["; for (std::size_t i = 0; i < askHot.size(); ++i) *encoded << (i ? ", " : "") << askHot[i]; *encoded << "]},\n  \"batches\": [\n"; }
+    if (encoded) { *encoded << "{\n  \"pipeline_id\": \"hftmac.depth_ladder_offset_v3\",\n  \"version\": " << h.version << ",\n  \"batch_count\": " << h.batchCount << ",\n  \"hot_qty\": {\"bid\": ["; for (std::size_t i = 0; i < bidHot.size(); ++i) *encoded << (i ? ", " : "") << bidHot[i]; *encoded << "], \"ask\": ["; for (std::size_t i = 0; i < askHot.size(); ++i) *encoded << (i ? ", " : "") << askHot[i]; *encoded << "]},\n  \"batches\": [\n"; }
     for (std::uint64_t bi = 0; bi < h.batchCount; ++bi) {
         std::uint64_t dt = 0, levelCount = 0, mode = 0; if (!readVarint(batch, batchEnd, dt) || !readVarint(batch, batchEnd, levelCount) || !readVarint(batch, batchEnd, mode)) return Status::CorruptData; ts += static_cast<std::int64_t>(dt);
         const bool runMode = mode != 0u; std::uint64_t bidCount = 0, askCount = 0; if (runMode && (!readVarint(batch, batchEnd, bidCount) || !readVarint(batch, batchEnd, askCount) || bidCount + askCount != levelCount)) return Status::CorruptData;
@@ -219,7 +255,7 @@ Status decodeBytes(std::span<const std::uint8_t> data, std::string* jsonl, std::
 
 std::string statsJson(const Header& h) {
     std::ostringstream out;
-    out << "{\n  \"pipeline_id\": \"hftmac.depth_ladder_offset_v2\",\n  \"version\": 2,\n  \"batch_count\": " << h.batchCount << ",\n  \"total_level_count\": " << h.levelCount << ",\n  \"raw_runtime_bytes\": " << (h.batchCount * 8u + h.levelCount * 32u) << ",\n  \"encoded_bytes\": " << h.outputBytes << ",\n  \"bytes_per_level\": " << (h.levelCount ? static_cast<double>(h.outputBytes) / static_cast<double>(h.levelCount) : 0.0) << ",\n  \"delete_count\": " << h.deleteCount << ",\n  \"qty_escape_count\": " << h.qtyEscapeCount << ",\n  \"run_mode_batch_count\": " << h.runModeBatchCount << ",\n  \"fallback_batch_count\": " << h.fallbackBatchCount << ",\n  \"offset_price_count\": " << h.offsetPriceCount << ",\n  \"absolute_price_count\": " << h.absolutePriceCount << ",\n  \"batch_stream_bytes\": " << h.batchBytes << ",\n  \"side_stream_bytes\": " << h.sideBytes << ",\n  \"delete_bit_stream_bytes\": " << h.deleteBytes << ",\n  \"price_stream_bytes\": " << h.priceBytes << ",\n  \"qty_code_stream_bytes\": " << h.qtyCodeBytes << ",\n  \"qty_escape_stream_bytes\": " << h.qtyEscapeBytes << "\n}\n";
+    out << "{\n  \"pipeline_id\": \"hftmac.depth_ladder_offset_v3\",\n  \"version\": " << h.version << ",\n  \"batch_count\": " << h.batchCount << ",\n  \"total_level_count\": " << h.levelCount << ",\n  \"raw_runtime_bytes\": " << (h.batchCount * 8u + h.levelCount * 32u) << ",\n  \"encoded_bytes\": " << h.outputBytes << ",\n  \"bytes_per_level\": " << (h.levelCount ? static_cast<double>(h.outputBytes) / static_cast<double>(h.levelCount) : 0.0) << ",\n  \"delete_count\": " << h.deleteCount << ",\n  \"qty_escape_count\": " << h.qtyEscapeCount << ",\n  \"run_mode_batch_count\": " << h.runModeBatchCount << ",\n  \"fallback_batch_count\": " << h.fallbackBatchCount << ",\n  \"offset_price_count\": " << h.offsetPriceCount << ",\n  \"absolute_price_count\": " << h.absolutePriceCount << ",\n  \"batch_stream_bytes\": " << h.batchBytes << ",\n  \"side_stream_bytes\": " << h.sideBytes << ",\n  \"delete_bit_stream_bytes\": " << h.deleteBytes << ",\n  \"price_stream_bytes\": " << h.priceBytes << ",\n  \"qty_code_stream_bytes\": " << h.qtyCodeBytes << ",\n  \"qty_escape_stream_bytes\": " << h.qtyEscapeBytes << "\n}\n";
     return out.str();
 }
 
@@ -231,7 +267,7 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     CompressionResult result{}; internal::applyPipeline(result, &pipeline); result.streamType = StreamType::Depth; result.inputPath = request.inputPath; const auto totalStart = timing::nowNs();
     std::vector<std::uint8_t> input; const auto readStart = timing::nowNs(); if (!internal::readFileBytes(request.inputPath, input)) { auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to read input file"); metrics::recordRun(failed); return failed; } result.readNs = timing::nowNs() - readStart; result.inputBytes = input.size();
     std::vector<Batch> batches; const auto parseStart = timing::nowNs(); batches.reserve(std::count(input.begin(), input.end(), static_cast<std::uint8_t>('\n')) + 1u); if (!parseBatches(input, batches)) { auto failed = internal::fail(Status::CorruptData, request, &pipeline, "input is not canonical depth jsonl"); metrics::recordRun(failed); return failed; } result.parseNs = timing::nowNs() - parseStart;
-    Header h{}; h.inputBytes = result.inputBytes; h.batchCount = batches.size(); std::int64_t timeScale = batches.front().ts, priceScale = 0, qtyScale = 0; std::unordered_map<std::int64_t, std::uint32_t> bidQtyCounts, askQtyCounts;
+    Header h{}; h.version = pipeline.id == std::string_view{"hftmac.depth_ladder_offset_v3"} ? 3u : 2u; h.inputBytes = result.inputBytes; h.batchCount = batches.size(); std::int64_t timeScale = batches.front().ts, priceScale = 0, qtyScale = 0; std::unordered_map<std::int64_t, std::uint32_t> bidQtyCounts, askQtyCounts;
     for (const auto& batch : batches) { timeScale = gcdAbs(timeScale, batch.ts - batches.front().ts); h.levelCount += batch.levels.size(); for (const auto& level : batch.levels) { priceScale = gcdAbs(priceScale, level.price); qtyScale = gcdAbs(qtyScale, level.qty); if (level.qty != 0) { if (level.side == 0) ++bidQtyCounts[level.qty]; else ++askQtyCounts[level.qty]; } } }
     h.timeScale = safeScale(timeScale); h.priceScale = safeScale(priceScale); h.qtyScale = safeScale(qtyScale); h.baseTsUnit = batches.front().ts / h.timeScale;
     auto bidHotVec = buildHotQty(bidQtyCounts, h.qtyScale); auto askHotVec = buildHotQty(askQtyCounts, h.qtyScale); h.bidHotCount = static_cast<std::uint16_t>(bidHotVec.size()); std::vector<std::int64_t> hot; hot.insert(hot.end(), bidHotVec.begin(), bidHotVec.end()); hot.insert(hot.end(), askHotVec.begin(), askHotVec.end()); h.hotQtyCount = static_cast<std::uint32_t>(hot.size()); h.hotQtyBytes = static_cast<std::uint32_t>(hot.size() * sizeof(std::int64_t)); std::span<const std::int64_t> bidHot{hot.data(), h.bidHotCount}; std::span<const std::int64_t> askHot{hot.data() + h.bidHotCount, hot.size() - h.bidHotCount};
@@ -257,11 +293,11 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     std::vector<std::uint8_t> file; (void)readFile(outputPath, file); std::string decoded; const auto decodeStart = timing::nowNs(); const auto decodeCycles = timing::readCycles(); const auto decodeStatus = decodeBytes(file, &decoded, nullptr); result.decodeCycles = timing::readCycles() - decodeCycles; result.decodeNs = timing::nowNs() - decodeStart; result.decodeCoreNs = result.decodeNs; result.roundtripOk = isOk(decodeStatus) && decoded.size() == input.size() && std::equal(decoded.begin(), decoded.end(), reinterpret_cast<const char*>(input.data())); result.status = result.roundtripOk ? Status::Ok : Status::DecodeError; if (!result.roundtripOk) result.error = "roundtrip check failed"; (void)internal::writeTextFile(result.metricsPath, toMetricsJson(result)); metrics::recordRun(result); return result;
 }
 
-ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept { std::vector<std::uint8_t> data; ReplayArtifactInfo info{}; info.path = path; if (!readFile(path, data)) { info.status = Status::IoError; info.error = "failed to read artifact"; return info; } Header h{}; if (!readHeader(data, h)) { info.status = Status::CorruptData; info.error = "invalid depth v2 artifact"; return info; } info.status = Status::Ok; info.found = true; info.formatId = "hftmac.depth_ladder_offset.v2"; info.pipelineId = std::string{pipeline.id}; info.transform = std::string{pipeline.transform}; info.entropy = std::string{pipeline.entropy}; info.streamType = StreamType::Depth; info.version = h.version; info.inputBytes = h.inputBytes; info.outputBytes = h.outputBytes; info.lineCount = h.batchCount; info.blockCount = 1; return info; }
+ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept { std::vector<std::uint8_t> data; ReplayArtifactInfo info{}; info.path = path; if (!readFile(path, data)) { info.status = Status::IoError; info.error = "failed to read artifact"; return info; } Header h{}; if (!readHeader(data, h)) { info.status = Status::CorruptData; info.error = "invalid depth ladder artifact"; return info; } info.status = Status::Ok; info.found = true; info.formatId = h.version >= 3u ? "hftmac.depth_ladder_offset.v3" : "hftmac.depth_ladder_offset.v2"; info.pipelineId = std::string{pipeline.id}; info.transform = std::string{pipeline.transform}; info.entropy = std::string{pipeline.entropy}; info.streamType = StreamType::Depth; info.version = h.version; info.inputBytes = h.inputBytes; info.outputBytes = h.outputBytes; info.lineCount = h.batchCount; info.blockCount = 1; return info; }
 Status decode(std::span<const std::uint8_t> bytes, const DecodedBlockCallback& onBlock) noexcept { std::string out; const auto status = decodeBytes(bytes, &out, nullptr); if (!isOk(status)) return status; return emitText(out, onBlock); }
 Status decodeFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; return decode(data, onBlock); }
 Status inspectEncodedJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; std::ostringstream out; const auto status = decodeBytes(data, nullptr, &out); if (!isOk(status)) return status; return emitText(out.str(), onBlock); }
-Status inspectEncodedBinaryFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; Header h{}; if (!readHeader(data, h)) return Status::CorruptData; std::ostringstream out; out << "depth_ladder_offset_v2 bytes=" << data.size() << " header=" << kHeaderBytes << " hot_qty=" << h.hotQtyBytes << " batch=" << h.batchBytes << " side=" << h.sideBytes << " price_mode=" << h.priceModeBytes << " delete=" << h.deleteBytes << " price=" << h.priceBytes << " qty_code=" << h.qtyCodeBytes << " qty_escape=" << h.qtyEscapeBytes << "\n"; return emitText(out.str(), onBlock); }
+Status inspectEncodedBinaryFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; Header h{}; if (!readHeader(data, h)) return Status::CorruptData; std::ostringstream out; out << (h.version >= 3u ? "depth_ladder_offset_v3" : "depth_ladder_offset_v2") << " bytes=" << data.size() << " header=" << kHeaderBytes << " hot_qty=" << h.hotQtyBytes << " batch=" << h.batchBytes << " side=" << h.sideBytes << " price_mode=" << h.priceModeBytes << " delete=" << h.deleteBytes << " price=" << h.priceBytes << " qty_code=" << h.qtyCodeBytes << " qty_escape=" << h.qtyEscapeBytes << "\n"; return emitText(out.str(), onBlock); }
 Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; Header h{}; if (!readHeader(data, h)) return Status::CorruptData; return emitText(statsJson(h), onBlock); }
 
 }  // namespace hft_compressor::codecs::depth_ladder_offset_v2
