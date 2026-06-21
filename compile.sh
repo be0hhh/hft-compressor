@@ -21,8 +21,15 @@ if ! command -v cmake >/dev/null 2>&1; then
   exit 1
 fi
 
+CLANG_CXX="$(command -v clang++ || true)"
+if [[ -z "$CLANG_CXX" ]]; then
+  echo "Clang toolchain is required: install clang++ in WSL." >&2
+  exit 1
+fi
+
 if [[ -f build/CMakeCache.txt ]]; then
   CACHED_SOURCE="$(grep -E '^CMAKE_HOME_DIRECTORY:INTERNAL=' build/CMakeCache.txt 2>/dev/null | cut -d= -f2- || true)"
+  CACHED_CXX="$(grep -E '^CMAKE_CXX_COMPILER:FILEPATH=' build/CMakeCache.txt 2>/dev/null | cut -d= -f2- || true)"
   if [[ -n "$CACHED_SOURCE" && "$CACHED_SOURCE" != "$SCRIPT_DIR" ]]; then
     BUILD_DIR="$(cd build && pwd)"
     if [[ "$BUILD_DIR" != "$SCRIPT_DIR/build" ]]; then
@@ -31,10 +38,14 @@ if [[ -f build/CMakeCache.txt ]]; then
     fi
     echo "Build was configured from a different path. Removing hft-compressor/build/ to reconfigure."
     rm -rf build
+  elif [[ -n "$CACHED_CXX" && "$CACHED_CXX" != "$CLANG_CXX" ]]; then
+    echo "Build was configured with a non-Clang or different compiler. Removing hft-compressor/build/ to reconfigure with Clang."
+    rm -rf build
   fi
 fi
 
 cmake -S . -B build \
+  -DCMAKE_CXX_COMPILER="$CLANG_CXX" \
   -DCMAKE_BUILD_TYPE=Release \
   -DHFT_COMPRESSOR_BUILD_CLI=OFF \
   -DHFT_COMPRESSOR_BUILD_TESTS=OFF
