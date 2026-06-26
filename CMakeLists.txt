@@ -9,6 +9,11 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(HFT_COMPRESSOR_PORTABLE_BUILD "If ON: disable -march=native for hft-compressor Release builds." OFF)
+if(NOT HFT_COMPRESSOR_PORTABLE_BUILD)
+    add_compile_options($<$<CONFIG:Release>:-O3> $<$<CONFIG:Release>:-march=native>)
+endif()
+
 set(HFT_COMPRESSOR_BUILD_CLI ON CACHE BOOL "Build hft-compressor CLI")
 set(HFT_COMPRESSOR_BUILD_TESTS ON CACHE BOOL "Build hft-compressor tests")
 
