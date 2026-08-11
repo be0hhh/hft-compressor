@@ -155,7 +155,7 @@ void runStandardCodecCase(const StandardCodecCase& codec, const fs::path& input,
     hft_compressor::ReplayDecodeRequest decodeRequest{};
     decodeRequest.artifact = artifactRequest;
     decodeRequest.maxRecordsPerBatch = 1;
-    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(decodeRequest, [&](const hft_compressor::ReplayRecordBatchV1& batch) {
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(decodeRequest, [&](const hft_compressor::ReplayRecordBatch& batch) {
         tradeCount += batch.trades.size();
         assert(batch.streamType == hft_compressor::StreamType::Trades);
         return true;
@@ -216,27 +216,27 @@ int main() {
     spacedHftMacRequest.pipelineId = "hftmac.trades_grouped_delta_qtydict_math_v3";
     assert(hft_compressor::isOk(hft_compressor::compress(spacedHftMacRequest).status));
 
-    hft_compressor::CompressionRequest tradeMathV3Request{};
-    tradeMathV3Request.inputPath = input;
-    tradeMathV3Request.outputRoot = dir / "trade_math_v3_out";
-    tradeMathV3Request.pipelineId = "hftmac.trades_grouped_delta_qtydict_math_v3";
-    const auto tradeMathV3Result = hft_compressor::compress(tradeMathV3Request);
-    assert(hft_compressor::isOk(tradeMathV3Result.status));
-    assert(tradeMathV3Result.roundtripOk);
-    hft_compressor::ReplayArtifactRequest tradeMathV3ArtifactRequest{};
-    tradeMathV3ArtifactRequest.compressedRoot = tradeMathV3Request.outputRoot;
-    tradeMathV3ArtifactRequest.sessionDir = input.parent_path();
-    tradeMathV3ArtifactRequest.streamType = hft_compressor::StreamType::Trades;
-    tradeMathV3ArtifactRequest.preferredPipelineId = "hftmac.trades_grouped_delta_qtydict_math_v3";
-    const auto tradeMathV3Artifact = hft_compressor::discoverReplayArtifact(tradeMathV3ArtifactRequest);
-    assert(hft_compressor::isOk(tradeMathV3Artifact.status));
-    assert(tradeMathV3Artifact.formatId == "hftmac.trades_grouped_delta_qtydict.math.v3");
-    std::string tradeMathV3Decoded;
-    assert(hft_compressor::isOk(hft_compressor::decodeReplayArtifactJsonl(tradeMathV3Artifact, [&tradeMathV3Decoded](std::span<const std::uint8_t> block) {
-        tradeMathV3Decoded.append(reinterpret_cast<const char*>(block.data()), block.size());
+    hft_compressor::CompressionRequest currentTradeRequest{};
+    currentTradeRequest.inputPath = input;
+    currentTradeRequest.outputRoot = dir / "trade_current_out";
+    currentTradeRequest.pipelineId = "hftmac.trades_grouped_delta_qtydict_math_v3";
+    const auto currentTradeResult = hft_compressor::compress(currentTradeRequest);
+    assert(hft_compressor::isOk(currentTradeResult.status));
+    assert(currentTradeResult.roundtripOk);
+    hft_compressor::ReplayArtifactRequest currentTradeArtifactRequest{};
+    currentTradeArtifactRequest.compressedRoot = currentTradeRequest.outputRoot;
+    currentTradeArtifactRequest.sessionDir = input.parent_path();
+    currentTradeArtifactRequest.streamType = hft_compressor::StreamType::Trades;
+    currentTradeArtifactRequest.preferredPipelineId = "hftmac.trades_grouped_delta_qtydict_math_v3";
+    const auto currentTradeArtifact = hft_compressor::discoverReplayArtifact(currentTradeArtifactRequest);
+    assert(hft_compressor::isOk(currentTradeArtifact.status));
+    assert(currentTradeArtifact.formatId == "hftmac.trades_grouped_delta_qtydict.math.v3");
+    std::string currentTradeDecoded;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayArtifactJsonl(currentTradeArtifact, [&currentTradeDecoded](std::span<const std::uint8_t> block) {
+        currentTradeDecoded.append(reinterpret_cast<const char*>(block.data()), block.size());
         return true;
     })));
-    assert(tradeMathV3Decoded == "[1,2,1,100]\n[2,3,0,200]\n");
+    assert(currentTradeDecoded == "[1,2,1,100]\n[2,3,0,200]\n");
 
 
     const auto bookMathInput = dir / "bookticker.jsonl";
@@ -354,7 +354,7 @@ int main() {
     hft_compressor::ReplayDecodeRequest rawDecodeRequest{};
     rawDecodeRequest.artifact = rawArtifactRequest;
     rawDecodeRequest.maxRecordsPerBatch = 2;
-    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(rawDecodeRequest, [&](const hft_compressor::ReplayRecordBatchV1& batch) {
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(rawDecodeRequest, [&](const hft_compressor::ReplayRecordBatch& batch) {
         rawTradeCount += batch.trades.size();
         assert(batch.streamType == hft_compressor::StreamType::Trades);
         return true;
@@ -416,12 +416,12 @@ int main() {
     v1Compatible[5] = 0u;
     const auto v1CompatiblePath = dir / "v1_compatible.hfc";
     writeBytes(v1CompatiblePath, v1Compatible);
-    std::string decodedV1;
-    assert(hft_compressor::isOk(hft_compressor::decodeHfcFile(v1CompatiblePath, [&decodedV1](std::span<const std::uint8_t> block) {
-        decodedV1.append(reinterpret_cast<const char*>(block.data()), block.size());
+    std::string legacyDecoded;
+    assert(hft_compressor::isOk(hft_compressor::decodeHfcFile(v1CompatiblePath, [&legacyDecoded](std::span<const std::uint8_t> block) {
+        legacyDecoded.append(reinterpret_cast<const char*>(block.data()), block.size());
         return true;
     })));
-    assert(decodedV1 == decoded);
+    assert(legacyDecoded == decoded);
 
     const auto hfcInfo = hft_compressor::openHfcFile(result.outputPath);
     assert(hft_compressor::isOk(hfcInfo.status));
@@ -455,7 +455,7 @@ int main() {
     hft_compressor::ReplayDecodeRequest decodeRequest{};
     decodeRequest.artifact = artifactRequest;
     decodeRequest.maxRecordsPerBatch = 1;
-    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(decodeRequest, [&](const hft_compressor::ReplayRecordBatchV1& batch) {
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(decodeRequest, [&](const hft_compressor::ReplayRecordBatch& batch) {
         ++batchCount;
         tradeCount += batch.trades.size();
         assert(batch.streamType == hft_compressor::StreamType::Trades);
@@ -466,7 +466,7 @@ int main() {
     })));
     assert(batchCount == 2u);
     assert(tradeCount == 2u);
-    assert(hft_compressor::decodeReplayRecordBatches(decodeRequest, [](const hft_compressor::ReplayRecordBatchV1&) {
+    assert(hft_compressor::decodeReplayRecordBatches(decodeRequest, [](const hft_compressor::ReplayRecordBatch&) {
         return false;
     }) == hft_compressor::Status::CallbackStopped);
 
@@ -630,7 +630,7 @@ int main() {
     std::size_t depthRecordCount = 0;
     hft_compressor::ReplayDecodeRequest depthDecodeRequest{};
     depthDecodeRequest.artifact = depthArtifactRequest;
-    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(depthDecodeRequest, [&](const hft_compressor::ReplayRecordBatchV1& batch) {
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(depthDecodeRequest, [&](const hft_compressor::ReplayRecordBatch& batch) {
         assert(batch.streamType == hft_compressor::StreamType::Depth);
         assert(batch.depths.size() == 1u);
         assert(batch.depthLevels.size() == 2u);

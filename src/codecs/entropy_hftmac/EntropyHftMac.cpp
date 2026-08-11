@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "codecs/bookticker_delta_mask/BookTickerDeltaMask.hpp"
-#include "codecs/depth_ladder_offset/DepthLadderOffsetV2.hpp"
+#include "codecs/depth_ladder_offset/DepthLadderOffset.hpp"
 #include "codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.hpp"
 #include "common/CompressionInternals.hpp"
 #include "common/timing.hpp"
@@ -391,7 +391,7 @@ Status decodeBase(BaseKind base, std::span<const std::uint8_t> bytes, const Deco
     switch (base) {
         case BaseKind::Trades: return trades_grouped_delta_qtydict::decode(bytes, onBlock);
         case BaseKind::BookTicker: return bookticker_delta_mask::decode(bytes, onBlock);
-        case BaseKind::Depth: return depth_ladder_offset_v2::decode(bytes, onBlock);
+        case BaseKind::Depth: return depth_ladder_offset::decode(bytes, onBlock);
     }
     return Status::CorruptData;
 }
@@ -591,7 +591,7 @@ Status inspectEncodedJsonFile(const std::filesystem::path& path, const DecodedBl
     switch (static_cast<BaseKind>(header.base)) {
         case BaseKind::Trades: return trades_grouped_delta_qtydict::decode(baseBytes, onBlock);
         case BaseKind::BookTicker: return bookticker_delta_mask::decode(baseBytes, onBlock);
-        case BaseKind::Depth: return depth_ladder_offset_v2::decode(baseBytes, onBlock);
+        case BaseKind::Depth: return depth_ladder_offset::decode(baseBytes, onBlock);
     }
     return Status::CorruptData;
 }

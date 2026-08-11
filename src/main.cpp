@@ -5,7 +5,7 @@
 
 #include "codecs/bookticker_delta_mask/BookTickerDeltaMask.hpp"
 #include "codecs/depth_ladder_offset/DepthLadderOffset.hpp"
-#include "codecs/depth_ladder_offset/DepthLadderOffsetV2.hpp"
+#include "codecs/depth_ladder_offset/LegacyDepthLadderOffset.hpp"
 #include "codecs/entropy_hftmac/EntropyHftMac.hpp"
 #include "codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.hpp"
 #include "hft_compressor/compressor.hpp"
@@ -67,23 +67,23 @@ int main(int argc, char** argv) {
             if (view == "stats") return hft_compressor::codecs::bookticker_delta_mask::inspectStatsJsonFile(input, callback);
             return hft_compressor::Status::InvalidArgument;
         };
-        const auto tryDepthV1 = [&]() noexcept {
+        const auto tryLegacyDepth = [&]() noexcept {
+            if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::legacy_depth_ladder_offset::decodeFile(input, callback);
+            if (view == "encoded-json") return hft_compressor::codecs::legacy_depth_ladder_offset::inspectEncodedJsonFile(input, callback);
+            if (view == "encoded-binary") return hft_compressor::codecs::legacy_depth_ladder_offset::inspectEncodedBinaryFile(input, callback);
+            if (view == "stats") return hft_compressor::codecs::legacy_depth_ladder_offset::inspectStatsJsonFile(input, callback);
+            return hft_compressor::Status::InvalidArgument;
+        };
+        const auto tryCurrentDepth = [&]() noexcept {
             if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::depth_ladder_offset::decodeFile(input, callback);
             if (view == "encoded-json") return hft_compressor::codecs::depth_ladder_offset::inspectEncodedJsonFile(input, callback);
             if (view == "encoded-binary") return hft_compressor::codecs::depth_ladder_offset::inspectEncodedBinaryFile(input, callback);
             if (view == "stats") return hft_compressor::codecs::depth_ladder_offset::inspectStatsJsonFile(input, callback);
             return hft_compressor::Status::InvalidArgument;
         };
-        const auto tryDepthV2 = [&]() noexcept {
-            if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::depth_ladder_offset_v2::decodeFile(input, callback);
-            if (view == "encoded-json") return hft_compressor::codecs::depth_ladder_offset_v2::inspectEncodedJsonFile(input, callback);
-            if (view == "encoded-binary") return hft_compressor::codecs::depth_ladder_offset_v2::inspectEncodedBinaryFile(input, callback);
-            if (view == "stats") return hft_compressor::codecs::depth_ladder_offset_v2::inspectStatsJsonFile(input, callback);
-            return hft_compressor::Status::InvalidArgument;
-        };
         const auto tryDepth = [&]() noexcept {
-            auto st = tryDepthV1();
-            if (!hft_compressor::isOk(st)) st = tryDepthV2();
+            auto st = tryLegacyDepth();
+            if (!hft_compressor::isOk(st)) st = tryCurrentDepth();
             return st;
         };
         status = tryEntropy();

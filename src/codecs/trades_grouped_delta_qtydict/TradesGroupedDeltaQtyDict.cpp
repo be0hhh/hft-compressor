@@ -24,7 +24,7 @@ namespace {
 
 constexpr std::uint32_t kFileMagic = 0x46435843u;  // CXCF
 constexpr std::uint32_t kChunkMagic = 0x4b484354u; // TCHK
-constexpr std::uint16_t kVersionV3 = 3u;
+constexpr std::uint16_t kCurrentArtifactVersion = 3u;
 constexpr std::size_t kFileHeaderBytes = 96u;
 constexpr std::size_t kChunkHeaderBytes = 160u;
 
@@ -77,7 +77,7 @@ struct EncodedChunk {
 
 struct FileHeader {
     std::uint32_t magic{kFileMagic};
-    std::uint16_t version{kVersionV3};
+    std::uint16_t version{kCurrentArtifactVersion};
     std::uint16_t stream{0};
     std::uint16_t lineEnding{1};
     std::uint16_t reserved{0};
@@ -363,7 +363,7 @@ std::uint32_t headerCrc32c(const FileHeader& header) {
 
 bool validHeader(const FileHeader& header) noexcept {
     return header.magic == kFileMagic
-        && header.version == kVersionV3
+        && header.version == kCurrentArtifactVersion
         && format::streamFromWire(header.stream) == StreamType::Trades
         && (header.lineEnding == 1u || header.lineEnding == 2u)
         && header.reserved == 0u
@@ -467,9 +467,9 @@ bool parseTrades(std::span<const std::uint8_t> input, std::vector<Trade>& out) {
     return !out.empty();
 }
 
-void buildHotQty(const std::vector<Trade>& trades, std::size_t begin, std::size_t end, EncodedChunk& chunk, bool useV2) {
+void buildHotQty(const std::vector<Trade>& trades, std::size_t begin, std::size_t end, EncodedChunk& chunk, bool useCompactQuantityTable) {
     std::unordered_map<std::int64_t, std::uint32_t> counts;
-    for (std::size_t i = begin; i < end; ++i) ++counts[useV2 ? trades[i].qty / chunk.qtyScale : trades[i].qty];
+    for (std::size_t i = begin; i < end; ++i) ++counts[useCompactQuantityTable ? trades[i].qty / chunk.qtyScale : trades[i].qty];
     std::vector<std::pair<std::int64_t, std::uint32_t>> values;
     values.reserve(counts.size());
     for (const auto& item : counts) values.push_back(item);
@@ -480,8 +480,8 @@ void buildHotQty(const std::vector<Trade>& trades, std::size_t begin, std::size_
 
     std::array<std::uint32_t, 4> capacities{16u, 32u, 64u, 128u};
     std::uint64_t bestCost = UINT64_MAX;
-    std::uint32_t bestCapacity = useV2 ? 16u : kHotQtyCount;
-    if (!useV2) {
+    std::uint32_t bestCapacity = useCompactQuantityTable ? 16u : kHotQtyCount;
+    if (!useCompactQuantityTable) {
         chunk.hotQtyCapacity = kHotQtyCount;
         chunk.hotQtyBits = 7u;
         chunk.hotQtyCount = static_cast<std::uint32_t>(std::min<std::size_t>(values.size(), kHotQtyCount));
@@ -994,7 +994,7 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     }
 
     FileHeader fileHeader{};
-    fileHeader.version = kVersionV3;
+    fileHeader.version = kCurrentArtifactVersion;
     fileHeader.stream = format::streamToWire(StreamType::Trades);
     fileHeader.lineEnding = detectLineEnding(input);
     fileHeader.chunkRecords = kDefaultChunkRecords;

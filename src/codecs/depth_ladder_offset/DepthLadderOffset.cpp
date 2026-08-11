@@ -10,92 +10,294 @@
 #include <unordered_map>
 #include <vector>
 
+#include <simdjson.h>
+
 #include "common/CompressionInternals.hpp"
 #include "common/timing.hpp"
-#include "container/hfc/format.hpp"
 #include "hft_compressor/metrics.hpp"
 
 namespace hft_compressor::codecs::depth_ladder_offset {
 namespace {
 
-constexpr std::uint32_t kMagic = 0x50454443u; // CDEP
-constexpr std::uint16_t kVersion = 1u;
-constexpr std::size_t kHeaderBytes = 160u;
+constexpr std::uint32_t kMagic = 0x32454443u; // CDE2
+constexpr std::uint16_t kLegacyArtifactVersion = 2u;
+constexpr std::uint16_t kCurrentArtifactVersion = 3u;
+constexpr std::size_t kHeaderBytes = 176u;
+
+bool isSimdjsonEmpty(simdjson::error_code error) noexcept {
+    return error == simdjson::EMPTY || static_cast<int>(error) == 12;
+}
 constexpr std::uint32_t kHotQtyCount = 64u;
+constexpr std::uint32_t kInspectBatchLimit = 128u;
 
 struct Level { std::int64_t price{0}, qty{0}, side{0}; };
 struct Batch { std::int64_t ts{0}; std::vector<Level> levels; };
 struct Header {
-    std::uint32_t magic{kMagic}; std::uint16_t version{kVersion}; std::uint16_t reserved{0};
+    std::uint32_t magic{kMagic}; std::uint16_t version{kCurrentArtifactVersion}; std::uint16_t bidHotCount{0};
     std::uint64_t inputBytes{0}, outputBytes{0}, batchCount{0}, levelCount{0};
     std::int64_t timeScale{1}, priceScale{1}, qtyScale{1}, baseTsUnit{0};
-    std::uint32_t hotQtyCount{0};
-    std::uint32_t batchBytes{0}, sideBytes{0}, priceModeBytes{0}, deleteBytes{0}, priceBytes{0}, qtyCodeBytes{0}, qtyEscapeBytes{0}, hotQtyBytes{0};
-    std::uint32_t deleteCount{0}, qtyEscapeCount{0}, offsetPriceCount{0}, absolutePriceCount{0}, explicitSideCount{0};
+    std::uint32_t hotQtyCount{0}, hotQtyBytes{0};
+    std::uint32_t batchBytes{0}, sideBytes{0}, priceModeBytes{0}, deleteBytes{0}, priceBytes{0}, qtyCodeBytes{0}, qtyEscapeBytes{0};
+    std::uint32_t deleteCount{0}, qtyEscapeCount{0}, runModeBatchCount{0}, fallbackBatchCount{0};
+    std::uint32_t offsetPriceCount{0}, absolutePriceCount{0};
 };
 
-struct Cursor { std::string_view text{}; std::size_t pos{0}; void ws() noexcept { while(pos<text.size()&&(text[pos]==' '||text[pos]=='\t'||text[pos]=='\r'))++pos; } bool ch(char c) noexcept { ws(); if(pos>=text.size()||text[pos]!=c)return false; ++pos; return true; } bool peek(char c) noexcept { ws(); return pos<text.size()&&text[pos]==c; } bool i64(std::int64_t& out) noexcept { ws(); const char* b=text.data()+pos; const char* e=text.data()+text.size(); const auto [p,ec]=std::from_chars(b,e,out); if(ec!=std::errc{}||p==b)return false; pos=static_cast<std::size_t>(p-text.data()); return true; } bool end() noexcept { ws(); return pos==text.size(); } };
-bool validSide(std::int64_t s) noexcept { return s==0 || s==1; }
-bool parseLine(std::string_view line, Batch& out) noexcept { Cursor p{line}; if(!p.ch('[')||!p.peek('[')) return false; while(p.peek('[')) { Level l{}; if(!p.ch('[')||!p.i64(l.price)||!p.ch(',')||!p.i64(l.qty)||!p.ch(',')||!p.i64(l.side)||!validSide(l.side)||!p.ch(']')||!p.ch(',')) return false; out.levels.push_back(l); } return p.i64(out.ts)&&p.ch(']')&&p.end()&&!out.levels.empty(); }
-bool parseBatches(std::span<const std::uint8_t> input, std::vector<Batch>& out) { std::int64_t prev=0; bool have=false; std::size_t start=0; while(start<input.size()) { std::size_t end=start; while(end<input.size()&&input[end]!=static_cast<std::uint8_t>('\n'))++end; std::string_view line{reinterpret_cast<const char*>(input.data()+start),end-start}; if(!line.empty()&&line.back()=='\r')line.remove_suffix(1); if(line.empty()) return false; Batch b{}; if(!parseLine(line,b)) return false; if(have&&b.ts<prev) return false; prev=b.ts; have=true; out.push_back(std::move(b)); start=end+(end<input.size()?1u:0u); } return !out.empty(); }
+struct Cursor {
+    std::string_view text{}; std::size_t pos{0};
+    void ws() noexcept { while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\r')) ++pos; }
+    bool ch(char c) noexcept { ws(); if (pos >= text.size() || text[pos] != c) return false; ++pos; return true; }
+    bool peek(char c) noexcept { ws(); return pos < text.size() && text[pos] == c; }
+    bool i64(std::int64_t& out) noexcept { ws(); const char* b = text.data() + pos; const char* e = text.data() + text.size(); const auto [p, ec] = std::from_chars(b, e, out); if (ec != std::errc{} || p == b) return false; pos = static_cast<std::size_t>(p - text.data()); return true; }
+    bool end() noexcept { ws(); return pos == text.size(); }
+};
 
-std::int64_t gcdAbs(std::int64_t a, std::int64_t b) noexcept { a=a<0?-a:a; b=b<0?-b:b; return std::gcd(a,b); }
-std::int64_t safeScale(std::int64_t v) noexcept { return v==0?1:(v<0?-v:v); }
-std::uint64_t zz(std::int64_t v) noexcept { return v<0?(static_cast<std::uint64_t>(-v)*2u-1u):static_cast<std::uint64_t>(v)*2u; }
-std::int64_t unzz(std::uint64_t v) noexcept { return (v&1u)?-static_cast<std::int64_t>((v+1u)/2u):static_cast<std::int64_t>(v/2u); }
-void varint(std::vector<std::uint8_t>& out, std::uint64_t v) { while(v>=0x80u){out.push_back(static_cast<std::uint8_t>(v|0x80u));v>>=7u;} out.push_back(static_cast<std::uint8_t>(v)); }
-bool readVar(const std::uint8_t*& p,const std::uint8_t* e,std::uint64_t& out) noexcept { out=0; unsigned s=0; while(p<e&&s<=63u){auto b=*p++; out|=static_cast<std::uint64_t>(b&0x7fu)<<s; if((b&0x80u)==0)return true; s+=7u;} return false; }
-template<class T> void le(std::vector<std::uint8_t>& out,T v){using U=std::make_unsigned_t<T>; U u=static_cast<U>(v); for(std::size_t i=0;i<sizeof(T);++i)out.push_back(static_cast<std::uint8_t>((u>>(i*8u))&0xffu));}
-template<class T> bool rd(const std::uint8_t*& p,const std::uint8_t* e,T& out) noexcept { if(static_cast<std::size_t>(e-p)<sizeof(T))return false; using U=std::make_unsigned_t<T>; U u=0; for(std::size_t i=0;i<sizeof(T);++i)u|=static_cast<U>(*p++)<<(i*8u); out=static_cast<T>(u); return true; }
+bool validSide(std::int64_t side) noexcept { return side == 0 || side == 1; }
 
-struct Bits { std::vector<std::uint8_t> bytes; std::uint8_t cur{0}; unsigned used{0}; void bit(bool v){ if(v)cur|=static_cast<std::uint8_t>(1u<<used); if(++used==8){bytes.push_back(cur);cur=0;used=0;} } std::vector<std::uint8_t> finish(){ if(used)bytes.push_back(cur); return bytes; } };
-struct BitReader { const std::uint8_t* p{}; const std::uint8_t* e{}; std::uint8_t cur{0}; unsigned used{8}; bool bit(bool& v) noexcept { if(used==8){ if(p>=e)return false; cur=*p++; used=0; } v=((cur>>used)&1u)!=0; ++used; return true; } };
-
-struct BookState { std::unordered_map<std::int64_t,std::int64_t> bid, ask; bool haveBid{false}, haveAsk{false}; std::int64_t bestBid{0}, bestAsk{0}; void recompute(){ haveBid=!bid.empty(); haveAsk=!ask.empty(); if(haveBid){bestBid=bid.begin()->first; for(auto& kv:bid)bestBid=std::max(bestBid,kv.first);} if(haveAsk){bestAsk=ask.begin()->first; for(auto& kv:ask)bestAsk=std::min(bestAsk,kv.first);} } void apply(std::int64_t side,std::int64_t price,std::int64_t qty){auto& m=side==0?bid:ask; if(qty==0)m.erase(price); else m[price]=qty;} };
-
-std::vector<std::uint8_t> headerBytes(const Header& h, const std::vector<std::int64_t>& hot) { std::vector<std::uint8_t> out; out.reserve(kHeaderBytes+hot.size()*8u); le(out,h.magic); le(out,h.version); le(out,h.reserved); le(out,h.inputBytes); le(out,h.outputBytes); le(out,h.batchCount); le(out,h.levelCount); le(out,h.timeScale); le(out,h.priceScale); le(out,h.qtyScale); le(out,h.baseTsUnit); le(out,h.hotQtyCount); le(out,h.batchBytes); le(out,h.sideBytes); le(out,h.priceModeBytes); le(out,h.deleteBytes); le(out,h.priceBytes); le(out,h.qtyCodeBytes); le(out,h.qtyEscapeBytes); le(out,h.hotQtyBytes); le(out,h.deleteCount); le(out,h.qtyEscapeCount); le(out,h.offsetPriceCount); le(out,h.absolutePriceCount); le(out,h.explicitSideCount); out.resize(kHeaderBytes,0); for(auto q:hot)le(out,q); return out; }
-bool readHeader(std::span<const std::uint8_t> d, Header& h) noexcept { if(d.size()<kHeaderBytes)return false; const auto* p=d.data(); const auto* e=d.data()+kHeaderBytes; return rd(p,e,h.magic)&&rd(p,e,h.version)&&rd(p,e,h.reserved)&&rd(p,e,h.inputBytes)&&rd(p,e,h.outputBytes)&&rd(p,e,h.batchCount)&&rd(p,e,h.levelCount)&&rd(p,e,h.timeScale)&&rd(p,e,h.priceScale)&&rd(p,e,h.qtyScale)&&rd(p,e,h.baseTsUnit)&&rd(p,e,h.hotQtyCount)&&rd(p,e,h.batchBytes)&&rd(p,e,h.sideBytes)&&rd(p,e,h.priceModeBytes)&&rd(p,e,h.deleteBytes)&&rd(p,e,h.priceBytes)&&rd(p,e,h.qtyCodeBytes)&&rd(p,e,h.qtyEscapeBytes)&&rd(p,e,h.hotQtyBytes)&&rd(p,e,h.deleteCount)&&rd(p,e,h.qtyEscapeCount)&&rd(p,e,h.offsetPriceCount)&&rd(p,e,h.absolutePriceCount)&&rd(p,e,h.explicitSideCount)&&h.magic==kMagic&&h.version==kVersion&&h.hotQtyCount<=kHotQtyCount&&h.hotQtyBytes==h.hotQtyCount*8u; }
-bool take(std::span<const std::uint8_t> d, std::size_t& off, std::uint32_t n, std::span<const std::uint8_t>& s) noexcept { if(off+n>d.size())return false; s=d.subspan(off,n); off+=n; return true; }
-
-std::uint64_t qtyCode(const std::vector<std::int64_t>& hot, std::int64_t qty) noexcept { for(std::size_t i=0;i<hot.size();++i) if(hot[i]==qty) return i; return hot.size(); }
-
-Status decodeBytes(std::span<const std::uint8_t> d, std::string* jsonl, std::ostream* encoded) noexcept {
-    Header h{}; if(!readHeader(d,h)) return Status::CorruptData; std::size_t off=kHeaderBytes; std::vector<std::int64_t> hot(h.hotQtyCount); const auto* hp=d.data()+off; const auto* he=hp+h.hotQtyBytes; for(auto& q:hot) if(!rd(hp,he,q)) return Status::CorruptData; off+=h.hotQtyBytes;
-    std::span<const std::uint8_t> batchS,sideS,modeS,delS,priceS,codeS,escS; if(!take(d,off,h.batchBytes,batchS)||!take(d,off,h.sideBytes,sideS)||!take(d,off,h.priceModeBytes,modeS)||!take(d,off,h.deleteBytes,delS)||!take(d,off,h.priceBytes,priceS)||!take(d,off,h.qtyCodeBytes,codeS)||!take(d,off,h.qtyEscapeBytes,escS)||off!=d.size()) return Status::CorruptData;
-    const auto* bp=batchS.data(); const auto* be=batchS.data()+batchS.size(); const auto* pp=priceS.data(); const auto* pe=priceS.data()+priceS.size(); const auto* cp=codeS.data(); const auto* ce=codeS.data()+codeS.size(); const auto* ep=escS.data(); const auto* ee=escS.data()+escS.size(); BitReader side{sideS.data(),sideS.data()+sideS.size()}, mode{modeS.data(),modeS.data()+modeS.size()}, del{delS.data(),delS.data()+delS.size()};
-    BookState state; std::int64_t ts=h.baseTsUnit; if(encoded)*encoded << "{\n  \"pipeline_id\": \"hftmac.depth_ladder_offset_v1\",\n  \"batch_count\": "<<h.batchCount<<",\n  \"batches\": [\n";
-    for(std::uint64_t bi=0;bi<h.batchCount;++bi){ std::uint64_t dt=0,n=0; if(!readVar(bp,be,dt)||!readVar(bp,be,n)) return Status::CorruptData; ts+=static_cast<std::int64_t>(dt); std::vector<Level> levels; levels.reserve(static_cast<std::size_t>(n)); if(encoded)*encoded << (bi?",\n":"") << "    {\"dt\":"<<dt<<",\"level_count\":"<<n<<"}";
-        for(std::uint64_t li=0;li<n;++li){ bool sb=false, mb=false, db=false; if(!side.bit(sb)||!mode.bit(mb)||!del.bit(db)) return Status::CorruptData; const std::int64_t s=sb?1:0; std::uint64_t pv=0; if(!readVar(pp,pe,pv)) return Status::CorruptData; std::int64_t price=0; if(mb){ const auto offv=static_cast<std::int64_t>(pv); price=s==0?state.bestBid-offv:state.bestAsk+offv; } else { price=unzz(pv); } std::int64_t qty=0; if(!db){ std::uint64_t code=0; if(!readVar(cp,ce,code)) return Status::CorruptData; if(code<hot.size()) qty=hot[static_cast<std::size_t>(code)]; else { std::uint64_t raw=0; if(!readVar(ep,ee,raw)) return Status::CorruptData; qty=static_cast<std::int64_t>(raw); } } levels.push_back(Level{price,qty,s}); }
-        if(jsonl){ *jsonl += "["; for(std::size_t i=0;i<levels.size();++i){ if(i)*jsonl += ","; const auto& l=levels[i]; *jsonl += "["+std::to_string(l.price*h.priceScale)+","+std::to_string(l.qty*h.qtyScale)+","+std::to_string(l.side)+"]"; } *jsonl += ","+std::to_string(ts*h.timeScale)+"]\n"; }
-        for(const auto& l:levels) state.apply(l.side,l.price,l.qty); state.recompute(); }
-    if(bp!=be||pp!=pe||cp!=ce||ep!=ee) return Status::CorruptData; if(encoded)*encoded << "\n  ]\n}\n"; return Status::Ok;
+bool parseLine(std::string_view line, Batch& out) noexcept {
+    Cursor p{line};
+    if (!p.ch('[') || !p.peek('[')) return false;
+    while (p.peek('[')) {
+        Level level{};
+        if (!p.ch('[') || !p.i64(level.price) || !p.ch(',') || !p.i64(level.qty) || !p.ch(',') || !p.i64(level.side) || !validSide(level.side) || !p.ch(']') || !p.ch(',')) return false;
+        out.levels.push_back(level);
+    }
+    return p.i64(out.ts) && p.ch(']') && p.end() && !out.levels.empty();
 }
 
-bool readFile(const std::filesystem::path& p, std::vector<std::uint8_t>& out) noexcept { return internal::readFileBytes(p,out); }
-Status emitText(const std::string& s,const DecodedBlockCallback& cb) noexcept { return cb(std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(s.data()),s.size()})?Status::Ok:Status::CallbackStopped; }
-std::string statsJson(const Header& h){ std::ostringstream o; o << "{\n  \"pipeline_id\": \"hftmac.depth_ladder_offset_v1\",\n  \"version\": "<<h.version<<",\n  \"batch_count\": "<<h.batchCount<<",\n  \"total_level_count\": "<<h.levelCount<<",\n  \"raw_runtime_bytes\": "<<(h.batchCount*8u+h.levelCount*32u)<<",\n  \"encoded_bytes\": "<<h.outputBytes<<",\n  \"bytes_per_level\": "<<(h.levelCount?static_cast<double>(h.outputBytes)/static_cast<double>(h.levelCount):0.0)<<",\n  \"delete_count\": "<<h.deleteCount<<",\n  \"offset_price_count\": "<<h.offsetPriceCount<<",\n  \"absolute_price_count\": "<<h.absolutePriceCount<<",\n  \"qty_escape_count\": "<<h.qtyEscapeCount<<",\n  \"batch_stream_bytes\": "<<h.batchBytes<<",\n  \"side_stream_bytes\": "<<h.sideBytes<<",\n  \"price_mode_stream_bytes\": "<<h.priceModeBytes<<",\n  \"delete_bit_stream_bytes\": "<<h.deleteBytes<<",\n  \"price_stream_bytes\": "<<h.priceBytes<<",\n  \"qty_code_stream_bytes\": "<<h.qtyCodeBytes<<",\n  \"qty_escape_stream_bytes\": "<<h.qtyEscapeBytes<<"\n}\n"; return o.str(); }
+bool parseBatches(std::span<const std::uint8_t> input, std::vector<Batch>& out) {
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded{reinterpret_cast<const char*>(input.data()), input.size()};
+    auto docs = parser.parse_many(padded.data(), padded.size(), padded.size());
+    std::int64_t previousTs = 0;
+    bool havePrevious = false;
+    for (auto docResult : docs) {
+        simdjson::dom::element doc;
+        const auto docError = docResult.get(doc);
+        if (isSimdjsonEmpty(docError)) continue;
+        if (docError != simdjson::SUCCESS || !doc.is_array()) return false;
+        simdjson::dom::array values;
+        if (doc.get_array().get(values) != simdjson::SUCCESS || values.size() < 2u) return false;
+        Batch batch{};
+        std::size_t index = 0;
+        const auto lastIndex = values.size() - 1u;
+        for (auto value : values) {
+            if (index == lastIndex) {
+                if (value.get_int64().get(batch.ts) != simdjson::SUCCESS) return false;
+            } else {
+                simdjson::dom::array levelValues;
+                if (value.get_array().get(levelValues) != simdjson::SUCCESS || levelValues.size() != 3u) return false;
+                Level level{};
+                std::size_t levelIndex = 0;
+                for (auto field : levelValues) {
+                    std::int64_t parsed = 0;
+                    if (field.get_int64().get(parsed) != simdjson::SUCCESS) return false;
+                    if (levelIndex == 0u) level.price = parsed;
+                    else if (levelIndex == 1u) level.qty = parsed;
+                    else level.side = parsed;
+                    ++levelIndex;
+                }
+                if (!validSide(level.side)) return false;
+                batch.levels.push_back(level);
+            }
+            ++index;
+        }
+        if (batch.levels.empty()) return false;
+        if (havePrevious && batch.ts < previousTs) return false;
+        previousTs = batch.ts;
+        havePrevious = true;
+        out.push_back(std::move(batch));
+    }
+    return !out.empty();
+}
 
-} // namespace
+std::int64_t gcdAbs(std::int64_t a, std::int64_t b) noexcept { a = a < 0 ? -a : a; b = b < 0 ? -b : b; return std::gcd(a, b); }
+std::int64_t safeScale(std::int64_t value) noexcept { return value == 0 ? 1 : (value < 0 ? -value : value); }
+std::uint64_t zigzag(std::int64_t value) noexcept { return value < 0 ? static_cast<std::uint64_t>(-value) * 2u - 1u : static_cast<std::uint64_t>(value) * 2u; }
+std::int64_t unzigzag(std::uint64_t value) noexcept { return (value & 1u) != 0u ? -static_cast<std::int64_t>((value + 1u) / 2u) : static_cast<std::int64_t>(value / 2u); }
+
+void writeVarint(std::vector<std::uint8_t>& out, std::uint64_t value) {
+    while (value >= 0x80u) { out.push_back(static_cast<std::uint8_t>(value | 0x80u)); value >>= 7u; }
+    out.push_back(static_cast<std::uint8_t>(value));
+}
+
+bool readVarint(const std::uint8_t*& p, const std::uint8_t* end, std::uint64_t& out) noexcept {
+    out = 0; unsigned shift = 0;
+    while (p < end && shift <= 63u) {
+        const auto byte = *p++;
+        out |= static_cast<std::uint64_t>(byte & 0x7fu) << shift;
+        if ((byte & 0x80u) == 0u) return true;
+        shift += 7u;
+    }
+    return false;
+}
+
+template <class T> void writeLe(std::vector<std::uint8_t>& out, T value) {
+    using U = std::make_unsigned_t<T>; U raw = static_cast<U>(value);
+    for (std::size_t i = 0; i < sizeof(T); ++i) out.push_back(static_cast<std::uint8_t>((raw >> (i * 8u)) & 0xffu));
+}
+
+template <class T> bool readLe(const std::uint8_t*& p, const std::uint8_t* end, T& out) noexcept {
+    if (static_cast<std::size_t>(end - p) < sizeof(T)) return false;
+    using U = std::make_unsigned_t<T>; U raw = 0;
+    for (std::size_t i = 0; i < sizeof(T); ++i) raw |= static_cast<U>(*p++) << (i * 8u);
+    out = static_cast<T>(raw); return true;
+}
+struct BitWriter { std::vector<std::uint8_t> bytes; std::uint8_t current{0}; unsigned used{0}; void bit(bool value) { if (value) current |= static_cast<std::uint8_t>(1u << used); if (++used == 8u) { bytes.push_back(current); current = 0; used = 0; } } std::vector<std::uint8_t> finish() { if (used != 0u) bytes.push_back(current); return bytes; } };
+struct BitReader { const std::uint8_t* p{}; const std::uint8_t* end{}; std::uint8_t current{0}; unsigned used{8}; bool bit(bool& out) noexcept { if (used == 8u) { if (p >= end) return false; current = *p++; used = 0; } out = ((current >> used) & 1u) != 0u; ++used; return true; } };
+
+struct BookState {
+    std::unordered_map<std::int64_t, std::int64_t> bid, ask;
+    bool haveBid{false}, haveAsk{false}; std::int64_t bestBid{0}, bestAsk{0};
+    void recompute() { haveBid = !bid.empty(); haveAsk = !ask.empty(); if (haveBid) { bestBid = bid.begin()->first; for (const auto& item : bid) bestBid = std::max(bestBid, item.first); } if (haveAsk) { bestAsk = ask.begin()->first; for (const auto& item : ask) bestAsk = std::min(bestAsk, item.first); } }
+    void apply(std::int64_t side, std::int64_t price, std::int64_t qty) { auto& book = side == 0 ? bid : ask; if (qty == 0) book.erase(price); else book[price] = qty; }
+};
+
+std::vector<std::uint8_t> serializeHeader(const Header& h, const std::vector<std::int64_t>& hot) {
+    std::vector<std::uint8_t> out; out.reserve(kHeaderBytes + hot.size() * sizeof(std::int64_t));
+    writeLe(out, h.magic); writeLe(out, h.version); writeLe(out, h.bidHotCount);
+    writeLe(out, h.inputBytes); writeLe(out, h.outputBytes); writeLe(out, h.batchCount); writeLe(out, h.levelCount);
+    writeLe(out, h.timeScale); writeLe(out, h.priceScale); writeLe(out, h.qtyScale); writeLe(out, h.baseTsUnit);
+    writeLe(out, h.hotQtyCount); writeLe(out, h.hotQtyBytes); writeLe(out, h.batchBytes); writeLe(out, h.sideBytes); writeLe(out, h.priceModeBytes); writeLe(out, h.deleteBytes);
+    writeLe(out, h.priceBytes); writeLe(out, h.qtyCodeBytes); writeLe(out, h.qtyEscapeBytes);
+    writeLe(out, h.deleteCount); writeLe(out, h.qtyEscapeCount); writeLe(out, h.runModeBatchCount); writeLe(out, h.fallbackBatchCount); writeLe(out, h.offsetPriceCount); writeLe(out, h.absolutePriceCount);
+    out.resize(kHeaderBytes, 0);
+    for (const auto qty : hot) writeLe(out, qty);
+    return out;
+}
+
+bool readHeader(std::span<const std::uint8_t> data, Header& h) noexcept {
+    if (data.size() < kHeaderBytes) return false;
+    const auto* p = data.data(); const auto* end = data.data() + kHeaderBytes;
+    return readLe(p, end, h.magic) && readLe(p, end, h.version) && readLe(p, end, h.bidHotCount)
+        && readLe(p, end, h.inputBytes) && readLe(p, end, h.outputBytes) && readLe(p, end, h.batchCount) && readLe(p, end, h.levelCount)
+        && readLe(p, end, h.timeScale) && readLe(p, end, h.priceScale) && readLe(p, end, h.qtyScale) && readLe(p, end, h.baseTsUnit)
+        && readLe(p, end, h.hotQtyCount) && readLe(p, end, h.hotQtyBytes) && readLe(p, end, h.batchBytes) && readLe(p, end, h.sideBytes) && readLe(p, end, h.priceModeBytes) && readLe(p, end, h.deleteBytes)
+        && readLe(p, end, h.priceBytes) && readLe(p, end, h.qtyCodeBytes) && readLe(p, end, h.qtyEscapeBytes)
+        && readLe(p, end, h.deleteCount) && readLe(p, end, h.qtyEscapeCount) && readLe(p, end, h.runModeBatchCount) && readLe(p, end, h.fallbackBatchCount) && readLe(p, end, h.offsetPriceCount) && readLe(p, end, h.absolutePriceCount)
+        && h.magic == kMagic && (h.version == kLegacyArtifactVersion || h.version == kCurrentArtifactVersion) && h.hotQtyCount <= kHotQtyCount * 2u && h.bidHotCount <= h.hotQtyCount && h.hotQtyBytes == h.hotQtyCount * sizeof(std::int64_t);
+}
+
+bool take(std::span<const std::uint8_t> data, std::size_t& offset, std::uint32_t size, std::span<const std::uint8_t>& out) noexcept { if (offset + size > data.size()) return false; out = data.subspan(offset, size); offset += size; return true; }
+
+std::vector<std::int64_t> buildHotQty(const std::unordered_map<std::int64_t, std::uint32_t>& counts, std::int64_t qtyScale) {
+    std::vector<std::pair<std::int64_t, std::uint32_t>> values(counts.begin(), counts.end());
+    std::sort(values.begin(), values.end(), [](const auto& lhs, const auto& rhs) { return lhs.second == rhs.second ? lhs.first < rhs.first : lhs.second > rhs.second; });
+    std::vector<std::int64_t> out;
+    for (std::size_t i = 0; i < values.size() && i < kHotQtyCount; ++i) out.push_back(values[i].first / qtyScale);
+    return out;
+}
+
+std::uint64_t qtyCode(std::span<const std::int64_t> hot, std::int64_t qty) noexcept { for (std::size_t i = 0; i < hot.size(); ++i) if (hot[i] == qty) return i; return hot.size(); }
+
+void writeQty(std::int64_t side, std::int64_t qty, std::span<const std::int64_t> bidHot, std::span<const std::int64_t> askHot, std::vector<std::uint8_t>& codeStream, std::vector<std::uint8_t>& escapeStream, Header& h) {
+    const auto hot = side == 0 ? bidHot : askHot; const auto code = qtyCode(hot, qty); writeVarint(codeStream, code);
+    if (code == hot.size()) { writeVarint(escapeStream, static_cast<std::uint64_t>(qty)); ++h.qtyEscapeCount; }
+}
+
+bool readQty(std::int64_t side, std::span<const std::int64_t> bidHot, std::span<const std::int64_t> askHot, const std::uint8_t*& code, const std::uint8_t* codeEnd, const std::uint8_t*& escape, const std::uint8_t* escapeEnd, std::int64_t& qty) noexcept {
+    const auto hot = side == 0 ? bidHot : askHot; std::uint64_t rawCode = 0; if (!readVarint(code, codeEnd, rawCode)) return false;
+    if (rawCode < hot.size()) { qty = hot[static_cast<std::size_t>(rawCode)]; return true; }
+    std::uint64_t rawQty = 0; if (rawCode != hot.size() || !readVarint(escape, escapeEnd, rawQty)) return false; qty = static_cast<std::int64_t>(rawQty); return true;
+}
+
+bool runModeCandidate(const Batch& batch, const BookState& state, std::int64_t priceScale, std::uint64_t& bidCount, std::uint64_t& askCount) noexcept {
+    bidCount = 0; askCount = 0; bool seenAsk = false; std::int64_t prevBid = -1; std::int64_t prevAsk = -1;
+    for (const auto& raw : batch.levels) {
+        const auto price = raw.price / priceScale;
+        if (raw.side == 0) { if (seenAsk || !state.haveBid) return false; const auto off = state.bestBid - price; if (off < 0 || off < prevBid) return false; prevBid = off; ++bidCount; }
+        else { seenAsk = true; if (!state.haveAsk) return false; const auto off = price - state.bestAsk; if (off < 0 || off < prevAsk) return false; prevAsk = off; ++askCount; }
+    }
+    return bidCount != 0u || askCount != 0u;
+}
+
+bool readFile(const std::filesystem::path& path, std::vector<std::uint8_t>& out) noexcept { return internal::readFileBytes(path, out); }
+Status emitText(const std::string& text, const DecodedBlockCallback& onBlock) noexcept { return onBlock(std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(text.data()), text.size()}) ? Status::Ok : Status::CallbackStopped; }
+Status decodeBytes(std::span<const std::uint8_t> data, std::string* jsonl, std::ostream* encoded) noexcept {
+    Header h{}; if (!readHeader(data, h)) return Status::CorruptData;
+    std::size_t offset = kHeaderBytes; std::vector<std::int64_t> hot(h.hotQtyCount);
+    const auto* hp = data.data() + offset; const auto* he = hp + h.hotQtyBytes; for (auto& qty : hot) if (!readLe(hp, he, qty)) return Status::CorruptData; offset += h.hotQtyBytes;
+    std::span<const std::int64_t> bidHot{hot.data(), h.bidHotCount}; std::span<const std::int64_t> askHot{hot.data() + h.bidHotCount, hot.size() - h.bidHotCount};
+    std::span<const std::uint8_t> batchS, sideS, priceModeS, deleteS, priceS, codeS, escapeS;
+    if (!take(data, offset, h.batchBytes, batchS) || !take(data, offset, h.sideBytes, sideS) || !take(data, offset, h.priceModeBytes, priceModeS) || !take(data, offset, h.deleteBytes, deleteS) || !take(data, offset, h.priceBytes, priceS) || !take(data, offset, h.qtyCodeBytes, codeS) || !take(data, offset, h.qtyEscapeBytes, escapeS) || offset != data.size()) return Status::CorruptData;
+    const auto* batch = batchS.data(); const auto* batchEnd = batchS.data() + batchS.size(); const auto* price = priceS.data(); const auto* priceEnd = priceS.data() + priceS.size(); const auto* code = codeS.data(); const auto* codeEnd = codeS.data() + codeS.size(); const auto* escape = escapeS.data(); const auto* escapeEnd = escapeS.data() + escapeS.size();
+    BitReader sideBits{sideS.data(), sideS.data() + sideS.size()}; BitReader deleteBits{deleteS.data(), deleteS.data() + deleteS.size()}; BookState state; std::int64_t ts = h.baseTsUnit;
+    if (encoded) { *encoded << "{\n  \"pipeline_id\": \"hftmac.depth_ladder_offset_v3\",\n  \"version\": " << h.version << ",\n  \"batch_count\": " << h.batchCount << ",\n  \"hot_qty\": {\"bid\": ["; for (std::size_t i = 0; i < bidHot.size(); ++i) *encoded << (i ? ", " : "") << bidHot[i]; *encoded << "], \"ask\": ["; for (std::size_t i = 0; i < askHot.size(); ++i) *encoded << (i ? ", " : "") << askHot[i]; *encoded << "]},\n  \"batches\": [\n"; }
+    for (std::uint64_t bi = 0; bi < h.batchCount; ++bi) {
+        std::uint64_t dt = 0, levelCount = 0, mode = 0; if (!readVarint(batch, batchEnd, dt) || !readVarint(batch, batchEnd, levelCount) || !readVarint(batch, batchEnd, mode)) return Status::CorruptData; ts += static_cast<std::int64_t>(dt);
+        const bool runMode = mode != 0u; std::uint64_t bidCount = 0, askCount = 0; if (runMode && (!readVarint(batch, batchEnd, bidCount) || !readVarint(batch, batchEnd, askCount) || bidCount + askCount != levelCount)) return Status::CorruptData;
+        const auto bestBid = state.bestBid; const auto bestAsk = state.bestAsk; std::vector<Level> levels; levels.reserve(static_cast<std::size_t>(levelCount));
+        if (encoded && bi < kInspectBatchLimit) *encoded << (bi ? ",\n" : "") << "    {\"dt\": " << dt << ", \"level_count\": " << levelCount << ", \"mode\": \"" << (runMode ? "side_runs_offset_gaps" : "explicit") << "\", \"best_before\": {\"bid\": " << bestBid << ", \"ask\": " << bestAsk << "}, \"levels\": [";
+        auto readOne = [&](std::int64_t side, bool offsetMode, std::int64_t& prevOffset, std::uint64_t localIndex) -> bool {
+            if (!offsetMode) { bool sb = false; if (!sideBits.bit(sb)) return false; side = sb ? 1 : 0; }
+            std::uint64_t rawPrice = 0; if (!readVarint(price, priceEnd, rawPrice)) return false;
+            std::int64_t offsetValue = 0; std::int64_t priceTick = 0;
+            if (offsetMode) { offsetValue = localIndex == 0 ? static_cast<std::int64_t>(rawPrice) : prevOffset + static_cast<std::int64_t>(rawPrice); prevOffset = offsetValue; priceTick = side == 0 ? bestBid - offsetValue : bestAsk + offsetValue; }
+            else {
+                const bool haveSide = side == 0 ? state.haveBid : state.haveAsk;
+                if (haveSide) { offsetValue = unzigzag(rawPrice); priceTick = side == 0 ? bestBid - offsetValue : bestAsk + offsetValue; }
+                else { priceTick = unzigzag(rawPrice); }
+            }
+            bool deleted = false; if (!deleteBits.bit(deleted)) return false; std::int64_t qty = 0; if (!deleted && !readQty(side, bidHot, askHot, code, codeEnd, escape, escapeEnd, qty)) return false;
+            levels.push_back(Level{priceTick, qty, side});
+            if (encoded && bi < kInspectBatchLimit) *encoded << (levels.size() > 1 ? ", " : "") << "{\"side\": " << side << ", \"price\": " << priceTick << ", \"offset\": " << (offsetMode ? offsetValue : 0) << ", \"delete\": " << (deleted ? "true" : "false") << ", \"qty\": " << qty << "}";
+            return true;
+        };
+        if (runMode) { std::int64_t prev = 0; for (std::uint64_t i = 0; i < bidCount; ++i) if (!readOne(0, true, prev, i)) return Status::CorruptData; prev = 0; for (std::uint64_t i = 0; i < askCount; ++i) if (!readOne(1, true, prev, i)) return Status::CorruptData; }
+        else { std::int64_t prev = 0; for (std::uint64_t i = 0; i < levelCount; ++i) if (!readOne(0, false, prev, 0)) return Status::CorruptData; }
+        if (encoded && bi < kInspectBatchLimit) *encoded << "]}";
+        if (jsonl) { *jsonl += "["; for (std::size_t i = 0; i < levels.size(); ++i) { if (i) *jsonl += ","; const auto& l = levels[i]; *jsonl += "[" + std::to_string(l.price * h.priceScale) + "," + std::to_string(l.qty * h.qtyScale) + "," + std::to_string(l.side) + "]"; } *jsonl += "," + std::to_string(ts * h.timeScale) + "]\n"; }
+        for (const auto& level : levels) state.apply(level.side, level.price, level.qty); state.recompute();
+    }
+    if (batch != batchEnd || price != priceEnd || code != codeEnd || escape != escapeEnd) return Status::CorruptData;
+    if (encoded) { if (h.batchCount > kInspectBatchLimit) *encoded << "\n  ],\n  \"truncated\": true,\n  \"shown_batches\": " << kInspectBatchLimit << "\n}\n"; else *encoded << "\n  ],\n  \"truncated\": false\n}\n"; }
+    return Status::Ok;
+}
+
+std::string statsJson(const Header& h) {
+    std::ostringstream out;
+    out << "{\n  \"pipeline_id\": \"hftmac.depth_ladder_offset_v3\",\n  \"version\": " << h.version << ",\n  \"batch_count\": " << h.batchCount << ",\n  \"total_level_count\": " << h.levelCount << ",\n  \"raw_runtime_bytes\": " << (h.batchCount * 8u + h.levelCount * 32u) << ",\n  \"encoded_bytes\": " << h.outputBytes << ",\n  \"bytes_per_level\": " << (h.levelCount ? static_cast<double>(h.outputBytes) / static_cast<double>(h.levelCount) : 0.0) << ",\n  \"delete_count\": " << h.deleteCount << ",\n  \"qty_escape_count\": " << h.qtyEscapeCount << ",\n  \"run_mode_batch_count\": " << h.runModeBatchCount << ",\n  \"fallback_batch_count\": " << h.fallbackBatchCount << ",\n  \"offset_price_count\": " << h.offsetPriceCount << ",\n  \"absolute_price_count\": " << h.absolutePriceCount << ",\n  \"batch_stream_bytes\": " << h.batchBytes << ",\n  \"side_stream_bytes\": " << h.sideBytes << ",\n  \"delete_bit_stream_bytes\": " << h.deleteBytes << ",\n  \"price_stream_bytes\": " << h.priceBytes << ",\n  \"qty_code_stream_bytes\": " << h.qtyCodeBytes << ",\n  \"qty_escape_stream_bytes\": " << h.qtyEscapeBytes << "\n}\n";
+    return out.str();
+}
+
+}  // namespace
 
 CompressionResult compress(const CompressionRequest& request, const PipelineDescriptor& pipeline) noexcept {
-    if(request.inputPath.empty()){auto r=internal::fail(Status::InvalidArgument,request,&pipeline,"input path is empty");metrics::recordRun(r);return r;} if(inferStreamTypeFromPath(request.inputPath)!=StreamType::Depth){auto r=internal::fail(Status::UnsupportedStream,request,&pipeline,"expected depth.jsonl");metrics::recordRun(r);return r;}
-    CompressionResult r{}; internal::applyPipeline(r,&pipeline); r.streamType=StreamType::Depth; r.inputPath=request.inputPath; const auto total=timing::nowNs(); std::vector<std::uint8_t> input; const auto rs=timing::nowNs(); if(!internal::readFileBytes(request.inputPath,input)){auto f=internal::fail(Status::IoError,request,&pipeline,"failed to read input file");metrics::recordRun(f);return f;} r.readNs=timing::nowNs()-rs; r.inputBytes=input.size();
-    std::vector<Batch> batches; const auto ps=timing::nowNs(); batches.reserve(std::count(input.begin(),input.end(),static_cast<std::uint8_t>('\n'))+1u); if(!parseBatches(input,batches)){auto f=internal::fail(Status::CorruptData,request,&pipeline,"input is not canonical depth jsonl");metrics::recordRun(f);return f;} r.parseNs=timing::nowNs()-ps;
-    Header h{}; h.inputBytes=r.inputBytes; h.batchCount=batches.size(); std::int64_t tg=batches.front().ts, pg=0,qg=0; std::unordered_map<std::int64_t,std::uint32_t> qc; for(const auto& b:batches){tg=gcdAbs(tg,b.ts-batches.front().ts); h.levelCount+=b.levels.size(); for(const auto& l:b.levels){pg=gcdAbs(pg,l.price); qg=gcdAbs(qg,l.qty); if(l.qty!=0)++qc[l.qty];}} h.timeScale=safeScale(tg); h.priceScale=safeScale(pg); h.qtyScale=safeScale(qg); h.baseTsUnit=batches.front().ts/h.timeScale;
-    std::vector<std::pair<std::int64_t,std::uint32_t>> qv(qc.begin(),qc.end()); std::sort(qv.begin(),qv.end(),[](auto&a,auto&b){return a.second==b.second?a.first<b.first:a.second>b.second;}); std::vector<std::int64_t> hot; for(std::size_t i=0;i<qv.size()&&i<kHotQtyCount;++i) hot.push_back(qv[i].first/h.qtyScale); h.hotQtyCount=hot.size(); h.hotQtyBytes=hot.size()*8u;
-    std::vector<std::uint8_t> batchS, priceS, codeS, escS; Bits sideB, modeB, delB; BookState state; std::int64_t pts=h.baseTsUnit; const auto es=timing::nowNs(); const auto ec=timing::readCycles();
-    for(const auto& b:batches){ const auto ts=b.ts/h.timeScale; varint(batchS,static_cast<std::uint64_t>(ts-pts)); varint(batchS,b.levels.size()); pts=ts; const bool haveBeforeBid=state.haveBid, haveBeforeAsk=state.haveAsk; const auto bestBid=state.bestBid, bestAsk=state.bestAsk; for(const auto& raw:b.levels){ const auto side=raw.side; const auto price=raw.price/h.priceScale; const auto qty=raw.qty/h.qtyScale; sideB.bit(side!=0); ++h.explicitSideCount; bool canOffset=(side==0?haveBeforeBid:haveBeforeAsk); std::int64_t off=0; if(canOffset){ off=side==0?bestBid-price:price-bestAsk; if(off<0) canOffset=false; } modeB.bit(canOffset); if(canOffset){ varint(priceS,static_cast<std::uint64_t>(off)); ++h.offsetPriceCount; } else { varint(priceS,zz(price)); ++h.absolutePriceCount; } const bool del=qty==0; delB.bit(del); if(del){++h.deleteCount;} else { const auto c=qtyCode(hot,qty); varint(codeS,c); if(c==hot.size()){varint(escS,static_cast<std::uint64_t>(qty));++h.qtyEscapeCount;} } }
-        for(const auto& raw:b.levels) state.apply(raw.side,raw.price/h.priceScale,raw.qty/h.qtyScale); state.recompute(); }
-    r.encodeCycles=timing::readCycles()-ec; r.encodeCoreNs=timing::nowNs()-es; const auto sideS=sideB.finish(), modeS=modeB.finish(), delS=delB.finish(); h.batchBytes=batchS.size(); h.sideBytes=sideS.size(); h.priceModeBytes=modeS.size(); h.deleteBytes=delS.size(); h.priceBytes=priceS.size(); h.qtyCodeBytes=codeS.size(); h.qtyEscapeBytes=escS.size(); h.outputBytes=kHeaderBytes+h.hotQtyBytes+h.batchBytes+h.sideBytes+h.priceModeBytes+h.deleteBytes+h.priceBytes+h.qtyCodeBytes+h.qtyEscapeBytes;
-    const auto outPath=internal::outputPathFor(request,pipeline,StreamType::Depth); std::error_code dirEc; std::filesystem::create_directories(outPath.parent_path(),dirEc); if(dirEc){auto f=internal::fail(Status::IoError,request,&pipeline,"failed to create output directory");metrics::recordRun(f);return f;} r.outputPath=outPath; r.metricsPath=outPath.parent_path()/(outPath.stem().string()+".metrics.json"); const auto ws=timing::nowNs(); std::ofstream out(outPath,std::ios::binary|std::ios::trunc); auto hb=headerBytes(h,hot); out.write(reinterpret_cast<const char*>(hb.data()),hb.size()); out.write(reinterpret_cast<const char*>(batchS.data()), static_cast<std::streamsize>(batchS.size())); out.write(reinterpret_cast<const char*>(sideS.data()), static_cast<std::streamsize>(sideS.size())); out.write(reinterpret_cast<const char*>(modeS.data()), static_cast<std::streamsize>(modeS.size())); out.write(reinterpret_cast<const char*>(delS.data()), static_cast<std::streamsize>(delS.size())); out.write(reinterpret_cast<const char*>(priceS.data()), static_cast<std::streamsize>(priceS.size())); out.write(reinterpret_cast<const char*>(codeS.data()), static_cast<std::streamsize>(codeS.size())); out.write(reinterpret_cast<const char*>(escS.data()), static_cast<std::streamsize>(escS.size())); out.close(); r.writeNs=timing::nowNs()-ws; r.outputBytes=h.outputBytes; r.lineCount=h.batchCount; r.blockCount=1; r.encodeNs=timing::nowNs()-total;
-    std::string decoded; std::vector<std::uint8_t> file; readFile(outPath,file); const auto ds=timing::nowNs(); const auto dc=timing::readCycles(); const auto st=decodeBytes(file,&decoded,nullptr); r.decodeCycles=timing::readCycles()-dc; r.decodeNs=timing::nowNs()-ds; r.decodeCoreNs=r.decodeNs; r.roundtripOk=isOk(st)&&decoded.size()==input.size()&&std::equal(decoded.begin(),decoded.end(),reinterpret_cast<const char*>(input.data())); r.status=r.roundtripOk?Status::Ok:Status::DecodeError; if(!r.roundtripOk)r.error="roundtrip check failed"; (void)internal::writeTextFile(r.metricsPath,toMetricsJson(r)); metrics::recordRun(r); return r;
+    if (request.inputPath.empty()) { auto result = internal::fail(Status::InvalidArgument, request, &pipeline, "input path is empty"); metrics::recordRun(result); return result; }
+    if (inferStreamTypeFromPath(request.inputPath) != StreamType::Depth) { auto result = internal::fail(Status::UnsupportedStream, request, &pipeline, "expected depth.jsonl"); metrics::recordRun(result); return result; }
+    CompressionResult result{}; internal::applyPipeline(result, &pipeline); result.streamType = StreamType::Depth; result.inputPath = request.inputPath; const auto totalStart = timing::nowNs();
+    std::vector<std::uint8_t> input; const auto readStart = timing::nowNs(); if (!internal::readFileBytes(request.inputPath, input)) { auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to read input file"); metrics::recordRun(failed); return failed; } result.readNs = timing::nowNs() - readStart; result.inputBytes = input.size();
+    std::vector<Batch> batches; const auto parseStart = timing::nowNs(); batches.reserve(std::count(input.begin(), input.end(), static_cast<std::uint8_t>('\n')) + 1u); if (!parseBatches(input, batches)) { auto failed = internal::fail(Status::CorruptData, request, &pipeline, "input is not canonical depth jsonl"); metrics::recordRun(failed); return failed; } result.parseNs = timing::nowNs() - parseStart;
+    Header h{}; h.version = kCurrentArtifactVersion; h.inputBytes = result.inputBytes; h.batchCount = batches.size(); std::int64_t timeScale = batches.front().ts, priceScale = 0, qtyScale = 0; std::unordered_map<std::int64_t, std::uint32_t> bidQtyCounts, askQtyCounts;
+    for (const auto& batch : batches) { timeScale = gcdAbs(timeScale, batch.ts - batches.front().ts); h.levelCount += batch.levels.size(); for (const auto& level : batch.levels) { priceScale = gcdAbs(priceScale, level.price); qtyScale = gcdAbs(qtyScale, level.qty); if (level.qty != 0) { if (level.side == 0) ++bidQtyCounts[level.qty]; else ++askQtyCounts[level.qty]; } } }
+    h.timeScale = safeScale(timeScale); h.priceScale = safeScale(priceScale); h.qtyScale = safeScale(qtyScale); h.baseTsUnit = batches.front().ts / h.timeScale;
+    auto bidHotVec = buildHotQty(bidQtyCounts, h.qtyScale); auto askHotVec = buildHotQty(askQtyCounts, h.qtyScale); h.bidHotCount = static_cast<std::uint16_t>(bidHotVec.size()); std::vector<std::int64_t> hot; hot.insert(hot.end(), bidHotVec.begin(), bidHotVec.end()); hot.insert(hot.end(), askHotVec.begin(), askHotVec.end()); h.hotQtyCount = static_cast<std::uint32_t>(hot.size()); h.hotQtyBytes = static_cast<std::uint32_t>(hot.size() * sizeof(std::int64_t)); std::span<const std::int64_t> bidHot{hot.data(), h.bidHotCount}; std::span<const std::int64_t> askHot{hot.data() + h.bidHotCount, hot.size() - h.bidHotCount};
+    std::vector<std::uint8_t> batchStream, priceStream, qtyCodeStream, qtyEscapeStream; BitWriter sideBits, deleteBits; BookState state; std::int64_t previousTs = h.baseTsUnit; const auto encodeStart = timing::nowNs(); const auto cycleStart = timing::readCycles();
+    for (const auto& batch : batches) {
+        const auto ts = batch.ts / h.timeScale; writeVarint(batchStream, static_cast<std::uint64_t>(ts - previousTs)); writeVarint(batchStream, static_cast<std::uint64_t>(batch.levels.size())); previousTs = ts;
+        std::uint64_t bidCount = 0, askCount = 0; const bool runMode = runModeCandidate(batch, state, h.priceScale, bidCount, askCount); writeVarint(batchStream, runMode ? 1u : 0u);
+        const auto bestBid = state.bestBid; const auto bestAsk = state.bestAsk;
+        if (runMode) {
+            ++h.runModeBatchCount; writeVarint(batchStream, bidCount); writeVarint(batchStream, askCount); std::int64_t previousOffset = 0; bool first = true;
+            for (const auto& raw : batch.levels) if (raw.side == 0) { const auto price = raw.price / h.priceScale; const auto qty = raw.qty / h.qtyScale; const auto offset = bestBid - price; writeVarint(priceStream, static_cast<std::uint64_t>(first ? offset : offset - previousOffset)); previousOffset = offset; first = false; ++h.offsetPriceCount; const bool deleted = qty == 0; deleteBits.bit(deleted); if (deleted) ++h.deleteCount; else writeQty(0, qty, bidHot, askHot, qtyCodeStream, qtyEscapeStream, h); }
+            previousOffset = 0; first = true;
+            for (const auto& raw : batch.levels) if (raw.side == 1) { const auto price = raw.price / h.priceScale; const auto qty = raw.qty / h.qtyScale; const auto offset = price - bestAsk; writeVarint(priceStream, static_cast<std::uint64_t>(first ? offset : offset - previousOffset)); previousOffset = offset; first = false; ++h.offsetPriceCount; const bool deleted = qty == 0; deleteBits.bit(deleted); if (deleted) ++h.deleteCount; else writeQty(1, qty, bidHot, askHot, qtyCodeStream, qtyEscapeStream, h); }
+        } else {
+            ++h.fallbackBatchCount;
+            for (const auto& raw : batch.levels) { const auto side = raw.side; const auto price = raw.price / h.priceScale; const auto qty = raw.qty / h.qtyScale; sideBits.bit(side != 0); const bool haveSide = side == 0 ? state.haveBid : state.haveAsk; if (haveSide) { writeVarint(priceStream, zigzag(side == 0 ? bestBid - price : price - bestAsk)); ++h.offsetPriceCount; } else { writeVarint(priceStream, zigzag(price)); ++h.absolutePriceCount; } const bool deleted = qty == 0; deleteBits.bit(deleted); if (deleted) ++h.deleteCount; else writeQty(side, qty, bidHot, askHot, qtyCodeStream, qtyEscapeStream, h); }
+        }
+        for (const auto& raw : batch.levels) state.apply(raw.side, raw.price / h.priceScale, raw.qty / h.qtyScale); state.recompute();
+    }
+    result.encodeCycles = timing::readCycles() - cycleStart; result.encodeCoreNs = timing::nowNs() - encodeStart; const auto sideStream = sideBits.finish(); const auto deleteStream = deleteBits.finish(); h.batchBytes = static_cast<std::uint32_t>(batchStream.size()); h.sideBytes = static_cast<std::uint32_t>(sideStream.size()); h.priceModeBytes = 0; h.deleteBytes = static_cast<std::uint32_t>(deleteStream.size()); h.priceBytes = static_cast<std::uint32_t>(priceStream.size()); h.qtyCodeBytes = static_cast<std::uint32_t>(qtyCodeStream.size()); h.qtyEscapeBytes = static_cast<std::uint32_t>(qtyEscapeStream.size()); h.outputBytes = kHeaderBytes + h.hotQtyBytes + h.batchBytes + h.sideBytes + h.priceModeBytes + h.deleteBytes + h.priceBytes + h.qtyCodeBytes + h.qtyEscapeBytes;
+    const auto outputPath = internal::outputPathFor(request, pipeline, StreamType::Depth); std::error_code dirEc; std::filesystem::create_directories(outputPath.parent_path(), dirEc); if (dirEc) { auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to create output directory"); metrics::recordRun(failed); return failed; }
+    result.outputPath = outputPath; result.metricsPath = outputPath.parent_path() / (outputPath.stem().string() + ".metrics.json"); const auto writeStart = timing::nowNs(); std::ofstream out(outputPath, std::ios::binary | std::ios::trunc); const auto header = serializeHeader(h, hot); out.write(reinterpret_cast<const char*>(header.data()), static_cast<std::streamsize>(header.size())); out.write(reinterpret_cast<const char*>(batchStream.data()), static_cast<std::streamsize>(batchStream.size())); out.write(reinterpret_cast<const char*>(sideStream.data()), static_cast<std::streamsize>(sideStream.size())); out.write(reinterpret_cast<const char*>(deleteStream.data()), static_cast<std::streamsize>(deleteStream.size())); out.write(reinterpret_cast<const char*>(priceStream.data()), static_cast<std::streamsize>(priceStream.size())); out.write(reinterpret_cast<const char*>(qtyCodeStream.data()), static_cast<std::streamsize>(qtyCodeStream.size())); out.write(reinterpret_cast<const char*>(qtyEscapeStream.data()), static_cast<std::streamsize>(qtyEscapeStream.size())); out.close(); result.writeNs = timing::nowNs() - writeStart; result.outputBytes = h.outputBytes; result.lineCount = h.batchCount; result.blockCount = 1; result.encodeNs = timing::nowNs() - totalStart;
+    std::vector<std::uint8_t> file; (void)readFile(outputPath, file); std::string decoded; const auto decodeStart = timing::nowNs(); const auto decodeCycles = timing::readCycles(); const auto decodeStatus = decodeBytes(file, &decoded, nullptr); result.decodeCycles = timing::readCycles() - decodeCycles; result.decodeNs = timing::nowNs() - decodeStart; result.decodeCoreNs = result.decodeNs; result.roundtripOk = isOk(decodeStatus) && decoded.size() == input.size() && std::equal(decoded.begin(), decoded.end(), reinterpret_cast<const char*>(input.data())); result.status = result.roundtripOk ? Status::Ok : Status::DecodeError; if (!result.roundtripOk) result.error = "roundtrip check failed"; (void)internal::writeTextFile(result.metricsPath, toMetricsJson(result)); metrics::recordRun(result); return result;
 }
 
-ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path,const PipelineDescriptor& pipeline) noexcept { std::vector<std::uint8_t>d; ReplayArtifactInfo i{}; i.path=path; if(!readFile(path,d)){i.status=Status::IoError;i.error="failed to read artifact";return i;} Header h{}; if(!readHeader(d,h)){i.status=Status::CorruptData;i.error="invalid depth artifact";return i;} i.status=Status::Ok;i.found=true;i.formatId="hftmac.depth_ladder_offset.v1";i.pipelineId=std::string{pipeline.id};i.transform=std::string{pipeline.transform};i.entropy=std::string{pipeline.entropy};i.streamType=StreamType::Depth;i.version=h.version;i.inputBytes=h.inputBytes;i.outputBytes=h.outputBytes;i.lineCount=h.batchCount;i.blockCount=1;return i; }
-Status decode(std::span<const std::uint8_t> bytes,const DecodedBlockCallback& cb) noexcept { std::string out; const auto st=decodeBytes(bytes,&out,nullptr); if(!isOk(st))return st; return emitText(out,cb); }
-Status decodeFile(const std::filesystem::path& path,const DecodedBlockCallback& cb) noexcept { std::vector<std::uint8_t>d; if(!readFile(path,d))return Status::IoError; return decode(d,cb); }
-Status inspectEncodedJsonFile(const std::filesystem::path& path,const DecodedBlockCallback& cb) noexcept { std::vector<std::uint8_t>d; if(!readFile(path,d))return Status::IoError; std::ostringstream out; const auto st=decodeBytes(d,nullptr,&out); if(!isOk(st))return st; return emitText(out.str(),cb); }
-Status inspectEncodedBinaryFile(const std::filesystem::path& path,const DecodedBlockCallback& cb) noexcept { std::vector<std::uint8_t>d; if(!readFile(path,d))return Status::IoError; Header h{}; if(!readHeader(d,h))return Status::CorruptData; std::ostringstream o; o<<"depth_ladder_offset_v1 bytes="<<d.size()<<" header="<<kHeaderBytes<<" hot_qty="<<h.hotQtyBytes<<" batch="<<h.batchBytes<<" side="<<h.sideBytes<<" mode="<<h.priceModeBytes<<" delete="<<h.deleteBytes<<" price="<<h.priceBytes<<" qty_code="<<h.qtyCodeBytes<<" qty_escape="<<h.qtyEscapeBytes<<"\n"; return emitText(o.str(),cb); }
-Status inspectStatsJsonFile(const std::filesystem::path& path,const DecodedBlockCallback& cb) noexcept { std::vector<std::uint8_t>d; if(!readFile(path,d))return Status::IoError; Header h{}; if(!readHeader(d,h))return Status::CorruptData; return emitText(statsJson(h),cb); }
+ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept { std::vector<std::uint8_t> data; ReplayArtifactInfo info{}; info.path = path; if (!readFile(path, data)) { info.status = Status::IoError; info.error = "failed to read artifact"; return info; } Header h{}; if (!readHeader(data, h)) { info.status = Status::CorruptData; info.error = "invalid depth ladder artifact"; return info; } info.status = Status::Ok; info.found = true; info.formatId = h.version >= 3u ? "hftmac.depth_ladder_offset.v3" : "hftmac.depth_ladder_offset.v2"; info.pipelineId = std::string{pipeline.id}; info.transform = std::string{pipeline.transform}; info.entropy = std::string{pipeline.entropy}; info.streamType = StreamType::Depth; info.version = h.version; info.inputBytes = h.inputBytes; info.outputBytes = h.outputBytes; info.lineCount = h.batchCount; info.blockCount = 1; return info; }
+Status decode(std::span<const std::uint8_t> bytes, const DecodedBlockCallback& onBlock) noexcept { std::string out; const auto status = decodeBytes(bytes, &out, nullptr); if (!isOk(status)) return status; return emitText(out, onBlock); }
+Status decodeFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; return decode(data, onBlock); }
+Status inspectEncodedJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; std::ostringstream out; const auto status = decodeBytes(data, nullptr, &out); if (!isOk(status)) return status; return emitText(out.str(), onBlock); }
+Status inspectEncodedBinaryFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; Header h{}; if (!readHeader(data, h)) return Status::CorruptData; std::ostringstream out; out << (h.version >= 3u ? "depth_ladder_offset_v3" : "depth_ladder_offset_v2") << " bytes=" << data.size() << " header=" << kHeaderBytes << " hot_qty=" << h.hotQtyBytes << " batch=" << h.batchBytes << " side=" << h.sideBytes << " price_mode=" << h.priceModeBytes << " delete=" << h.deleteBytes << " price=" << h.priceBytes << " qty_code=" << h.qtyCodeBytes << " qty_escape=" << h.qtyEscapeBytes << "\n"; return emitText(out.str(), onBlock); }
+Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; Header h{}; if (!readHeader(data, h)) return Status::CorruptData; return emitText(statsJson(h), onBlock); }
 
 }  // namespace hft_compressor::codecs::depth_ladder_offset

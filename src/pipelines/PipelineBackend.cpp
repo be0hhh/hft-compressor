@@ -5,7 +5,6 @@
 #include "codecs/bookticker_delta_mask/BookTickerDeltaMask.hpp"
 #include "codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.hpp"
 #include "codecs/depth_ladder_offset/DepthLadderOffset.hpp"
-#include "codecs/depth_ladder_offset/DepthLadderOffsetV2.hpp"
 #include "codecs/entropy_hftmac/EntropyHftMac.hpp"
 #include "codecs/gzip_jsonl_blocks/GzipJsonlBlocks.hpp"
 #include "codecs/lz4_jsonl_blocks/Lz4JsonlBlocks.hpp"
@@ -69,10 +68,10 @@ constexpr auto kBackends = std::to_array<PipelineBackend>({
      codecs::bookticker_delta_mask::decode},
     {"hftmac.depth_ladder_offset_v3",
      "hftmac.depth_ladder_offset.v3",
-     codecs::depth_ladder_offset_v2::compress,
-     codecs::depth_ladder_offset_v2::inspectArtifact,
-     codecs::depth_ladder_offset_v2::decodeFile,
-     codecs::depth_ladder_offset_v2::decode},
+     codecs::depth_ladder_offset::compress,
+     codecs::depth_ladder_offset::inspectArtifact,
+     codecs::depth_ladder_offset::decodeFile,
+     codecs::depth_ladder_offset::decode},
     {"hftmac.trades_grouped_delta_qtydict_ac16_ctx0_v1", "hftmac.trades_grouped_delta_qtydict.entropy.v1", codecs::entropy_hftmac::compress, codecs::entropy_hftmac::inspectArtifact, codecs::entropy_hftmac::decodeFile, codecs::entropy_hftmac::decode},
     {"hftmac.trades_grouped_delta_qtydict_ac16_ctx8_v1", "hftmac.trades_grouped_delta_qtydict.entropy.v1", codecs::entropy_hftmac::compress, codecs::entropy_hftmac::inspectArtifact, codecs::entropy_hftmac::decodeFile, codecs::entropy_hftmac::decode},
     {"hftmac.trades_grouped_delta_qtydict_ac16_ctx12_v1", "hftmac.trades_grouped_delta_qtydict.entropy.v1", codecs::entropy_hftmac::compress, codecs::entropy_hftmac::inspectArtifact, codecs::entropy_hftmac::decodeFile, codecs::entropy_hftmac::decode},

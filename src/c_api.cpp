@@ -86,7 +86,7 @@ extern "C" hftc_status hftc_decoder_decode_all(hftc_decoder* decoder,
     try {
         const auto status = hft_compressor::decodeReplayRecordBatches(
             decoder->request,
-            [&](const hft_compressor::ReplayRecordBatchV1& batch) -> bool {
+            [&](const hft_compressor::ReplayRecordBatch& batch) -> bool {
             std::vector<hftc_trade_record_v1> trades;
             trades.reserve(batch.trades.size());
             for (const auto& row : batch.trades) {

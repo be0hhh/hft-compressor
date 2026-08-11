@@ -89,7 +89,7 @@ add_library(hft_compressor_core SHARED
     src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp
     src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.cpp
     src/codecs/depth_ladder_offset/DepthLadderOffset.cpp
-    src/codecs/depth_ladder_offset/DepthLadderOffsetV2.cpp
+    src/codecs/depth_ladder_offset/LegacyDepthLadderOffset.cpp
     src/codecs/entropy_hftmac/EntropyHftMac.cpp
     src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.cpp
     src/codecs/lz4_jsonl_blocks/Lz4JsonlBlocks.cpp

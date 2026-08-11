@@ -67,7 +67,7 @@ Status decompressPayload(std::span<const std::uint8_t> input,
 #endif
 
 const standard_jsonl_blocks::CodecSpec kSpec{
-    format::kCodecXzJsonlBlocksV1,
+    format::kCodecXzJsonlBlocks,
     "hfc.xz_jsonl_blocks_v1",
     "liblzma was not found at configure time",
 #if HFT_COMPRESSOR_WITH_LZMA

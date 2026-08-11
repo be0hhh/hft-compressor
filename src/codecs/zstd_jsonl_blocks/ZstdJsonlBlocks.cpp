@@ -24,7 +24,7 @@ namespace {
 bool validHeader(const format::FileHeader& fileHeader) noexcept {
     return fileHeader.magic == format::kFileMagic
         && format::isSupportedVersion(fileHeader.version)
-        && fileHeader.codec == format::kCodecZstdJsonlBlocksV1
+        && fileHeader.codec == format::kCodecZstdJsonlBlocks
         && fileHeader.blockBytes != 0u;
 }
 

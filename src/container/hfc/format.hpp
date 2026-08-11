@@ -14,18 +14,18 @@ inline constexpr std::uint32_t kBlockMagic = 0x30424648u;
 inline constexpr std::uint16_t kVersion1 = 1;
 inline constexpr std::uint16_t kVersion2 = 2;
 inline constexpr std::uint16_t kVersion = kVersion2;
-inline constexpr std::uint16_t kCodecZstdJsonlBlocksV1 = 1;
-inline constexpr std::uint16_t kCodecLz4JsonlBlocksV1 = 2;
-inline constexpr std::uint16_t kCodecBrotliJsonlBlocksV1 = 3;
-inline constexpr std::uint16_t kCodecXzJsonlBlocksV1 = 4;
-inline constexpr std::uint16_t kCodecGzipJsonlBlocksV1 = 5;
+inline constexpr std::uint16_t kCodecZstdJsonlBlocks = 1;
+inline constexpr std::uint16_t kCodecLz4JsonlBlocks = 2;
+inline constexpr std::uint16_t kCodecBrotliJsonlBlocks = 3;
+inline constexpr std::uint16_t kCodecXzJsonlBlocks = 4;
+inline constexpr std::uint16_t kCodecGzipJsonlBlocks = 5;
 inline constexpr std::size_t kFileHeaderBytes = 64;
 inline constexpr std::size_t kBlockHeaderBytes = 32;
 
 struct FileHeader {
     std::uint32_t magic{kFileMagic};
     std::uint16_t version{kVersion};
-    std::uint16_t codec{kCodecZstdJsonlBlocksV1};
+    std::uint16_t codec{kCodecZstdJsonlBlocks};
     std::uint16_t stream{0};
     std::uint16_t reserved0{0};
     std::uint32_t blockBytes{0};

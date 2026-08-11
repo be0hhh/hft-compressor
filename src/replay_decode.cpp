@@ -54,7 +54,7 @@ bool validSide(std::int64_t side) noexcept {
     return side == 0 || side == 1;
 }
 
-bool parseTradeLine(std::string_view line, ReplayTradeRecordV1& out) noexcept {
+bool parseTradeLine(std::string_view line, ReplayTradeRecord& out) noexcept {
     JsonCursor p{line};
     return p.consume('[')
         && p.parseInt64(out.priceE8) && p.consume(',')
@@ -64,7 +64,7 @@ bool parseTradeLine(std::string_view line, ReplayTradeRecordV1& out) noexcept {
         && p.consume(']') && p.finish();
 }
 
-bool parseBookTickerLine(std::string_view line, ReplayBookTickerRecordV1& out) noexcept {
+bool parseBookTickerLine(std::string_view line, ReplayBookTickerRecord& out) noexcept {
     JsonCursor p{line};
     return p.consume('[')
         && p.parseInt64(out.bidPriceE8) && p.consume(',')
@@ -75,7 +75,7 @@ bool parseBookTickerLine(std::string_view line, ReplayBookTickerRecordV1& out) n
         && p.consume(']') && p.finish();
 }
 
-bool parseDepthLevel(JsonCursor& p, ReplayDepthLevelV1& out) noexcept {
+bool parseDepthLevel(JsonCursor& p, ReplayDepthLevel& out) noexcept {
     return p.consume('[')
         && p.parseInt64(out.priceE8) && p.consume(',')
         && p.parseInt64(out.qtyE8) && p.consume(',')
@@ -83,13 +83,13 @@ bool parseDepthLevel(JsonCursor& p, ReplayDepthLevelV1& out) noexcept {
         && p.consume(']');
 }
 
-bool parseDepthLine(std::string_view line, ReplayRecordBatchV1& batch) noexcept {
+bool parseDepthLine(std::string_view line, ReplayRecordBatch& batch) noexcept {
     JsonCursor p{line};
     if (!p.consume('[') || !p.peek('[')) return false;
-    ReplayDepthRecordV1 row{};
+    ReplayDepthRecord row{};
     row.firstLevelIndex = static_cast<std::uint32_t>(batch.depthLevels.size());
     while (p.peek('[')) {
-        ReplayDepthLevelV1 level{};
+        ReplayDepthLevel level{};
         if (!parseDepthLevel(p, level) || !p.consume(',')) return false;
         batch.depthLevels.push_back(level);
         ++row.levelCount;
@@ -99,15 +99,15 @@ bool parseDepthLine(std::string_view line, ReplayRecordBatchV1& batch) noexcept 
     return true;
 }
 
-bool parseLine(StreamType streamType, std::string_view line, ReplayRecordBatchV1& batch) noexcept {
+bool parseLine(StreamType streamType, std::string_view line, ReplayRecordBatch& batch) noexcept {
     if (streamType == StreamType::Trades) {
-        ReplayTradeRecordV1 row{};
+        ReplayTradeRecord row{};
         if (!parseTradeLine(line, row)) return false;
         batch.trades.push_back(row);
         return true;
     }
     if (streamType == StreamType::BookTicker) {
-        ReplayBookTickerRecordV1 row{};
+        ReplayBookTickerRecord row{};
         if (!parseBookTickerLine(line, row)) return false;
         batch.bookTickers.push_back(row);
         return true;
@@ -116,7 +116,7 @@ bool parseLine(StreamType streamType, std::string_view line, ReplayRecordBatchV1
     return false;
 }
 
-Status flushBatch(ReplayRecordBatchV1& batch, const ReplayRecordBatchCallback& onBatch) noexcept {
+Status flushBatch(ReplayRecordBatch& batch, const ReplayRecordBatchCallback& onBatch) noexcept {
     if (batch.recordCount() == 0u) return Status::Ok;
     if (!onBatch(batch)) return Status::CallbackStopped;
     batch.clearRows();
@@ -127,7 +127,7 @@ Status processJsonlBlock(StreamType streamType,
                          std::span<const std::uint8_t> block,
                          std::string& carry,
                          std::uint64_t& lineNumber,
-                         ReplayRecordBatchV1& batch,
+                         ReplayRecordBatch& batch,
                          std::size_t maxRecordsPerBatch,
                          const ReplayRecordBatchCallback& onBatch) noexcept {
     carry.append(reinterpret_cast<const char*>(block.data()), block.size());
@@ -156,7 +156,7 @@ Status processJsonlBlock(StreamType streamType,
 
 }  // namespace
 
-void ReplayRecordBatchV1::clearRows() noexcept {
+void ReplayRecordBatch::clearRows() noexcept {
     firstLineNumber = 0;
     lineCount = 0;
     decodedBytes = 0;
@@ -166,7 +166,7 @@ void ReplayRecordBatchV1::clearRows() noexcept {
     depthLevels.clear();
 }
 
-std::size_t ReplayRecordBatchV1::recordCount() const noexcept {
+std::size_t ReplayRecordBatch::recordCount() const noexcept {
     return trades.size() + bookTickers.size() + depths.size();
 }
 
@@ -175,7 +175,7 @@ Status decodeReplayArtifactRecordBatches(const ReplayArtifactInfo& artifact,
                                          const ReplayRecordBatchCallback& onBatch) noexcept {
     if (!artifact.found || artifact.streamType == StreamType::Unknown || !onBatch) return Status::InvalidArgument;
     maxRecordsPerBatch = std::max<std::size_t>(maxRecordsPerBatch, 1u);
-    ReplayRecordBatchV1 batch{};
+    ReplayRecordBatch batch{};
     batch.streamType = artifact.streamType;
     std::string carry;
     std::uint64_t lineNumber = 0;

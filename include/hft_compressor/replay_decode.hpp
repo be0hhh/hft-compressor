@@ -22,14 +22,14 @@ struct ReplayDecodeRequest {
     std::size_t maxRecordsPerBatch{4096u};
 };
 
-struct ReplayTradeRecordV1 {
+struct ReplayTradeRecord {
     std::int64_t tsNs{0};
     std::int64_t priceE8{0};
     std::int64_t qtyE8{0};
     std::int64_t side{0};
 };
 
-struct ReplayBookTickerRecordV1 {
+struct ReplayBookTickerRecord {
     std::int64_t tsNs{0};
     std::int64_t bidPriceE8{0};
     std::int64_t bidQtyE8{0};
@@ -37,33 +37,33 @@ struct ReplayBookTickerRecordV1 {
     std::int64_t askQtyE8{0};
 };
 
-struct ReplayDepthLevelV1 {
+struct ReplayDepthLevel {
     std::int64_t priceE8{0};
     std::int64_t qtyE8{0};
     std::int64_t side{0};
 };
 
-struct ReplayDepthRecordV1 {
+struct ReplayDepthRecord {
     std::int64_t tsNs{0};
     std::uint32_t firstLevelIndex{0};
     std::uint32_t levelCount{0};
 };
 
-struct ReplayRecordBatchV1 {
+struct ReplayRecordBatch {
     StreamType streamType{StreamType::Unknown};
     std::uint64_t firstLineNumber{0};
     std::uint64_t lineCount{0};
     std::uint64_t decodedBytes{0};
-    std::vector<ReplayTradeRecordV1> trades{};
-    std::vector<ReplayBookTickerRecordV1> bookTickers{};
-    std::vector<ReplayDepthRecordV1> depths{};
-    std::vector<ReplayDepthLevelV1> depthLevels{};
+    std::vector<ReplayTradeRecord> trades{};
+    std::vector<ReplayBookTickerRecord> bookTickers{};
+    std::vector<ReplayDepthRecord> depths{};
+    std::vector<ReplayDepthLevel> depthLevels{};
 
     void clearRows() noexcept;
     std::size_t recordCount() const noexcept;
 };
 
-using ReplayRecordBatchCallback = std::function<bool(const ReplayRecordBatchV1& batch)>;
+using ReplayRecordBatchCallback = std::function<bool(const ReplayRecordBatch& batch)>;
 
 HFT_COMPRESSOR_API Status decodeReplayRecordBatches(const ReplayDecodeRequest& request,
                                                     const ReplayRecordBatchCallback& onBatch) noexcept;

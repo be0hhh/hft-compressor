@@ -76,7 +76,7 @@ Status decompressPayload(std::span<const std::uint8_t> input,
 #endif
 
 const standard_jsonl_blocks::CodecSpec kSpec{
-    format::kCodecGzipJsonlBlocksV1,
+    format::kCodecGzipJsonlBlocks,
     "hfc.gzip_jsonl_blocks_v1",
     "zlib was not found at configure time",
 #if HFT_COMPRESSOR_WITH_ZLIB
