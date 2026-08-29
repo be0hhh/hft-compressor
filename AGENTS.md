@@ -14,7 +14,8 @@
 ## Boundaries
 
 - Keep compression codecs, file formats, decode/verify logic, pipeline registry, and compression metrics inside this app.
-- Do not move compression experiments into CXETCPP core `src/src`.
+- Do not move compression experiments into CXET core `src/src` or
+  `src/contracts`.
 - Do not make recorder depend on compressor private internals; expose stable public headers in `include/hft_compressor/`.
 
 ## Research contract

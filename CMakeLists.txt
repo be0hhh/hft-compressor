@@ -5,17 +5,25 @@ if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   message(FATAL_ERROR "hft-compressor is Clang-only. Configure with -DCMAKE_CXX_COMPILER=clang++.")
 endif()
 
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
-option(HFT_COMPRESSOR_PORTABLE_BUILD "If ON: disable -march=native for hft-compressor Release builds." OFF)
-if(NOT HFT_COMPRESSOR_PORTABLE_BUILD)
-    add_compile_options($<$<CONFIG:Release>:-O3> $<$<CONFIG:Release>:-march=native>)
+set(HFT_COMPRESSOR_STANDALONE OFF)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(HFT_COMPRESSOR_STANDALONE ON)
 endif()
 
-set(HFT_COMPRESSOR_BUILD_CLI ON CACHE BOOL "Build hft-compressor CLI")
-set(HFT_COMPRESSOR_BUILD_TESTS ON CACHE BOOL "Build hft-compressor tests")
+option(HFT_COMPRESSOR_PORTABLE_BUILD "If ON: disable -march=native for hft-compressor Release builds." OFF)
+if(HFT_COMPRESSOR_STANDALONE)
+    set(_HFT_COMPRESSOR_BUILD_TOOLS_DEFAULT ON)
+else()
+    set(_HFT_COMPRESSOR_BUILD_TOOLS_DEFAULT OFF)
+endif()
+
+option(HFT_COMPRESSOR_BUILD_CLI
+    "Build hft-compressor CLI"
+    ${_HFT_COMPRESSOR_BUILD_TOOLS_DEFAULT})
+option(HFT_COMPRESSOR_BUILD_TESTS
+    "Build hft-compressor tests"
+    ${_HFT_COMPRESSOR_BUILD_TOOLS_DEFAULT})
+unset(_HFT_COMPRESSOR_BUILD_TOOLS_DEFAULT)
 
 find_package(Threads REQUIRED)
 find_package(PkgConfig QUIET)
@@ -110,6 +118,12 @@ add_library(hft_compressor_core SHARED
     src/replay_decode.cpp
     src/stream_type.cpp
 )
+add_library(hft_compressor::core ALIAS hft_compressor_core)
+set_target_properties(hft_compressor_core PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+)
 target_include_directories(hft_compressor_core
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -117,6 +131,12 @@ target_include_directories(hft_compressor_core
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_compile_features(hft_compressor_core PUBLIC cxx_std_23)
+if(NOT HFT_COMPRESSOR_PORTABLE_BUILD)
+    target_compile_options(hft_compressor_core PRIVATE
+        $<$<CONFIG:Release>:-O3>
+        $<$<CONFIG:Release>:-march=native>
+    )
+endif()
 target_compile_definitions(hft_compressor_core
     PUBLIC
         HFT_COMPRESSOR_WITH_ZSTD=$<BOOL:${HFT_COMPRESSOR_WITH_ZSTD}>
@@ -166,13 +186,35 @@ endif()
 
 if(HFT_COMPRESSOR_BUILD_CLI)
     add_executable(hft-compressor src/main.cpp)
+    set_target_properties(hft-compressor PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
     target_link_libraries(hft-compressor PRIVATE hft_compressor_core)
+    if(NOT HFT_COMPRESSOR_PORTABLE_BUILD)
+        target_compile_options(hft-compressor PRIVATE
+            $<$<CONFIG:Release>:-O3>
+            $<$<CONFIG:Release>:-march=native>
+        )
+    endif()
 endif()
 
 if(HFT_COMPRESSOR_BUILD_TESTS)
     enable_testing()
     add_executable(hft-compressor-tests tests/compressor_tests.cpp)
+    set_target_properties(hft-compressor-tests PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
     target_link_libraries(hft-compressor-tests PRIVATE hft_compressor_core)
+    if(NOT HFT_COMPRESSOR_PORTABLE_BUILD)
+        target_compile_options(hft-compressor-tests PRIVATE
+            $<$<CONFIG:Release>:-O3>
+            $<$<CONFIG:Release>:-march=native>
+        )
+    endif()
     add_test(NAME hft-compressor-tests COMMAND hft-compressor-tests)
 endif()
 
