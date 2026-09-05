@@ -1,0 +1,71 @@
+name: cpp
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PATH: /usr/bin:/bin:/usr/sbin:/sbin
+
+jobs:
+  portable-clang:
+    name: portable-clang
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout hft-compressor
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Install build and codec dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            clang \
+            cmake \
+            libbrotli-dev \
+            liblz4-dev \
+            liblzma-dev \
+            libzstd-dev \
+            pkg-config \
+            zlib1g-dev
+
+      - name: Report CMake and CTest binaries
+        run: |
+          /usr/bin/cmake --version
+          /usr/bin/ctest --version
+
+      - name: Configure portable Clang build
+        run: >-
+          /usr/bin/cmake
+          -S .
+          -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_COMPILER=/usr/bin/clang++
+          -DHFT_COMPRESSOR_PORTABLE_BUILD=ON
+          -DHFT_COMPRESSOR_BUILD_CLI=ON
+          -DHFT_COMPRESSOR_BUILD_TESTS=ON
+
+      - name: Build library, CLI, and offline tests
+        run: /usr/bin/cmake --build build --parallel "$(nproc)"
+
+      - name: Run offline tests
+        run: >-
+          /usr/bin/ctest
+          --test-dir build
+          --output-on-failure
+          --no-tests=error
+          --timeout 180
