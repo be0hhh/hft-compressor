@@ -20,3 +20,8 @@ compile_commands.json
 .vscode/
 .idea/
 .DS_Store
+
+# Local environment and credentials.
+.env
+.env.*
+!.env.example
