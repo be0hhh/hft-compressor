@@ -10,13 +10,16 @@ and gzip baselines alongside project-owned stream codecs.
 
 ## Build
 
-The local `compile.sh` builds the shared library on Linux/WSL. A complete
-standalone portable build with the CLI and offline tests can be configured with:
+The local `compile.sh` builds the shared library on Linux/WSL. Keep this checkout
+under `CXETCPP/apps/hft-compressor` and prepare the shared Clang 24 toolchain
+from the CXET root with `python3 tools/Toolchain/BootstrapLlvm.py`.
+Both entrypoints use the canonical `cmake/CxetToolchain.cmake` selector.
+A complete standalone portable build with the CLI and offline tests can be
+configured from this directory with:
 
 ```bash
 /usr/bin/cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
   -DHFT_COMPRESSOR_PORTABLE_BUILD=ON \
   -DHFT_COMPRESSOR_BUILD_CLI=ON \
   -DHFT_COMPRESSOR_BUILD_TESTS=ON
@@ -24,5 +27,7 @@ standalone portable build with the CLI and offline tests can be configured with:
 /usr/bin/ctest --test-dir build --output-on-failure --no-tests=error
 ```
 
-The `cpp` workflow runs this portable Clang configuration with all five system
-codec libraries installed. It does not run compression benchmarks.
+The `cpp` workflow runs this pinned Clang configuration with all five system
+codec libraries installed. It obtains the shared selector/bootstrap from the
+private CXET root using `CI_CXETCPP_SSH_KEY`. It does not run compression
+benchmarks.

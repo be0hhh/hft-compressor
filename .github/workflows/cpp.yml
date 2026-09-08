@@ -21,12 +21,38 @@ jobs:
   portable-clang:
     name: portable-clang
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 180
 
     steps:
-      - name: Checkout hft-compressor
+      - name: Require private CXETCPP checkout key
+        env:
+          CI_CXETCPP_SSH_KEY: ${{ secrets.CI_CXETCPP_SSH_KEY }}
+        run: |
+          if [ -z "$CI_CXETCPP_SSH_KEY" ]; then
+            echo "::error::CI_CXETCPP_SSH_KEY is required to obtain the canonical compiler pin and bootstrap. Fork pull requests cannot supply this secret."
+            exit 1
+          fi
+
+      - name: Checkout canonical CXET toolchain owner
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          repository: be0hhh/CXETCPP
+          ref: main
+          ssh-key: ${{ secrets.CI_CXETCPP_SSH_KEY }}
+          path: source/CXETCPP
+          submodules: false
+          sparse-checkout: |
+            .github/actions/setup-toolchain
+            cmake
+            tools/Toolchain
+          persist-credentials: false
+
+      - name: Checkout triggering hft-compressor revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: source/CXETCPP/apps/hft-compressor
           persist-credentials: false
 
       - name: Install build and codec dependencies
@@ -36,6 +62,9 @@ jobs:
             build-essential \
             clang \
             cmake \
+            curl \
+            ninja-build \
+            python3 \
             libbrotli-dev \
             liblz4-dev \
             liblzma-dev \
@@ -43,26 +72,33 @@ jobs:
             pkg-config \
             zlib1g-dev
 
+      - name: Set up pinned LLVM
+        uses: ./source/CXETCPP/.github/actions/setup-toolchain
+        with:
+          source-root: source/CXETCPP
+
       - name: Report CMake and CTest binaries
         run: |
           /usr/bin/cmake --version
           /usr/bin/ctest --version
 
       - name: Configure portable Clang build
+        working-directory: source/CXETCPP/apps/hft-compressor
         run: >-
           /usr/bin/cmake
           -S .
           -B build
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_CXX_COMPILER=/usr/bin/clang++
           -DHFT_COMPRESSOR_PORTABLE_BUILD=ON
           -DHFT_COMPRESSOR_BUILD_CLI=ON
           -DHFT_COMPRESSOR_BUILD_TESTS=ON
 
       - name: Build library, CLI, and offline tests
+        working-directory: source/CXETCPP/apps/hft-compressor
         run: /usr/bin/cmake --build build --parallel "$(nproc)"
 
       - name: Run offline tests
+        working-directory: source/CXETCPP/apps/hft-compressor
         run: >-
           /usr/bin/ctest
           --test-dir build

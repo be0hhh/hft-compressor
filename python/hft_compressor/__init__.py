@@ -1,5 +1,5 @@
-"""Thin terminal/API wrapper over codecs stored in src/codecs/python."""
+"""Thin terminal/API wrapper over codecs stored in src/Runtime/src/Codecs/Python."""
 
-from .api import compress_file, decode_file, list_codecs, verify_file
+from .Api import compress_file, decode_file, list_codecs, verify_file
 
 __all__ = ["compress_file", "decode_file", "list_codecs", "verify_file"]

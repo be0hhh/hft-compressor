@@ -1,8 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  set(_hft_compressor_toolchain "${CMAKE_CURRENT_LIST_DIR}/../../cmake/CxetToolchain.cmake")
+  if(NOT EXISTS "${_hft_compressor_toolchain}")
+    message(FATAL_ERROR "Build hft-compressor under the canonical CXET root to select its pinned compiler.")
+  endif()
+  include("${_hft_compressor_toolchain}")
+  unset(_hft_compressor_toolchain)
+endif()
 project(hft-compressor LANGUAGES CXX VERSION 0.1.0)
 
 if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  message(FATAL_ERROR "hft-compressor is Clang-only. Configure with -DCMAKE_CXX_COMPILER=clang++.")
+  message(FATAL_ERROR "hft-compressor requires the pinned compiler selected by the canonical CXET root.")
 endif()
 
 set(HFT_COMPRESSOR_STANDALONE OFF)
@@ -93,30 +101,31 @@ if(ZLIB_FOUND)
 endif()
 
 add_library(hft_compressor_core SHARED
-    src/c_api.cpp
-    src/codecs/bookticker_delta_mask/BookTickerDeltaMask.cpp
-    src/codecs/brotli_jsonl_blocks/BrotliJsonlBlocks.cpp
-    src/codecs/depth_ladder_offset/DepthLadderOffset.cpp
-    src/codecs/depth_ladder_offset/LegacyDepthLadderOffset.cpp
-    src/codecs/entropy_hftmac/EntropyHftMac.cpp
-    src/codecs/gzip_jsonl_blocks/GzipJsonlBlocks.cpp
-    src/codecs/lz4_jsonl_blocks/Lz4JsonlBlocks.cpp
-    src/codecs/raw_jsonl_blocks/RawJsonlBlocks.cpp
-    src/codecs/standard_jsonl_blocks/StandardJsonlBlocks.cpp
-    src/codecs/trades_grouped_delta_qtydict/TradesGroupedDeltaQtyDict.cpp
-    src/codecs/xz_jsonl_blocks/XzJsonlBlocks.cpp
-    src/codecs/zstd_jsonl_blocks/ZstdJsonlBlocks.cpp
-    src/common/CompressionInternals.cpp
-    src/common/timing.cpp
-    src/compressor.cpp
-    src/container/hfc/format.cpp
-    src/decoder.cpp
-    src/metrics.cpp
-    src/metrics_server.cpp
-    src/pipelines/PipelineBackend.cpp
-    src/pipelines/PipelineRegistry.cpp
-    src/replay_decode.cpp
-    src/stream_type.cpp
+    src/Api/src/CApi.cpp
+    src/Runtime/src/Codecs/BooktickerDeltaMask/BookTickerDeltaMask.cpp
+    src/Runtime/src/Codecs/BrotliJsonlBlocks/BrotliJsonlBlocks.cpp
+    src/Runtime/src/Codecs/DepthLadderOffset/DepthLadderOffset.cpp
+    src/Runtime/src/Codecs/DepthLadderOffset/LegacyDepthLadderOffset.cpp
+    src/Runtime/src/Codecs/EntropyHftmac/EntropyHftMac.cpp
+    src/Runtime/src/Codecs/GzipJsonlBlocks/GzipJsonlBlocks.cpp
+    src/Runtime/src/Codecs/Lz4JsonlBlocks/Lz4JsonlBlocks.cpp
+    src/Runtime/src/Codecs/RawJsonlBlocks/RawJsonlBlocks.cpp
+    src/Runtime/src/Codecs/StandardJsonlBlocks/StandardJsonlBlocks.cpp
+    src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/TradesGroupedDeltaQtyDict.cpp
+    src/Runtime/src/Codecs/XzJsonlBlocks/XzJsonlBlocks.cpp
+    src/Runtime/src/Codecs/ZstdJsonlBlocks/ZstdJsonlBlocks.cpp
+    src/Runtime/src/Common/CompressionInternals.cpp
+    src/Runtime/src/Common/Timing.cpp
+    src/Api/src/Compressor.cpp
+    src/Runtime/src/Container/Hfc/Format.cpp
+    src/Api/src/Decoder.cpp
+    src/Runtime/src/Metrics/Metrics.cpp
+    src/Runtime/src/Metrics/CompressionResultMetrics.cpp
+    src/Runtime/src/Metrics/MetricsServer.cpp
+    src/Runtime/src/Pipelines/PipelineBackend.cpp
+    src/Runtime/src/Pipelines/PipelineRegistry.cpp
+    src/Api/src/ReplayDecode.cpp
+    src/Api/src/StreamType.cpp
 )
 add_library(hft_compressor::core ALIAS hft_compressor_core)
 set_target_properties(hft_compressor_core PROPERTIES
@@ -126,9 +135,9 @@ set_target_properties(hft_compressor_core PROPERTIES
 )
 target_include_directories(hft_compressor_core
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/Api/include
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime/src
 )
 target_compile_features(hft_compressor_core PUBLIC cxx_std_23)
 if(NOT HFT_COMPRESSOR_PORTABLE_BUILD)
@@ -185,7 +194,7 @@ if(HFT_COMPRESSOR_WITH_ZLIB)
 endif()
 
 if(HFT_COMPRESSOR_BUILD_CLI)
-    add_executable(hft-compressor src/main.cpp)
+    add_executable(hft-compressor src/Process/Main.cpp)
     set_target_properties(hft-compressor PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -202,7 +211,7 @@ endif()
 
 if(HFT_COMPRESSOR_BUILD_TESTS)
     enable_testing()
-    add_executable(hft-compressor-tests tests/compressor_tests.cpp)
+    add_executable(hft-compressor-tests tests/CompressorTests.cpp)
     set_target_properties(hft-compressor-tests PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -217,4 +226,3 @@ if(HFT_COMPRESSOR_BUILD_TESTS)
     endif()
     add_test(NAME hft-compressor-tests COMMAND hft-compressor-tests)
 endif()
-

@@ -3,7 +3,7 @@
 Python codec implementations live next to the C++ codecs:
 
 ```text
-src/codecs/python/
+src/Runtime/src/Codecs/Python/
   gzip_codec.py
   bz2_codec.py
   lzma_codec.py
@@ -30,7 +30,7 @@ PYTHONPATH=python python3 -m hft_compressor verify ./compressedData-python/py-gz
 You can also run the codec folder directly:
 
 ```bash
-python3 src/codecs/python/cli.py list
+python3 src/Runtime/src/Codecs/Python/Cli.py list
 ```
 
 Available without extra packages: `py.gzip_v1`, `py.bz2_v1`, `py.lzma_v1`, `py.zlib_v1`.

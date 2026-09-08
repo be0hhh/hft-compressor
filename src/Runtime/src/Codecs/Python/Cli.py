@@ -4,7 +4,8 @@ import argparse
 import json
 import sys
 
-from .Api import compress_file, decode_file, list_codecs, verify_file
+import Registry as registry
+from Common import PythonCodecError
 
 
 def print_json(value) -> None:
@@ -12,7 +13,7 @@ def print_json(value) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m hft_compressor")
+    parser = argparse.ArgumentParser(prog="python src/Runtime/src/Codecs/Python/Cli.py")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list")
@@ -35,20 +36,24 @@ def main(argv: list[str] | None = None) -> int:
     p_decode.add_argument("--codec", required=True)
 
     args = parser.parse_args(argv)
-    if args.cmd == "list":
-        print_json(list_codecs())
-        return 0
-    if args.cmd == "compress":
-        result = compress_file(args.input_path, args.codec, args.output_root, level=args.level, verify_mode=args.mode)
-        print_json(result)
-        return 0 if result.get("ok") else 1
-    if args.cmd == "verify":
-        result = verify_file(args.artifact_path, args.canonical_path, args.codec, verify_mode=args.mode)
-        print_json(result)
-        return 0 if result.get("ok") else 1
-    if args.cmd == "decode":
-        sys.stdout.buffer.write(decode_file(args.artifact_path, args.codec))
-        return 0
+    try:
+        if args.cmd == "list":
+            print_json(registry.list_codecs())
+            return 0
+        if args.cmd == "compress":
+            result = registry.compress_file(args.input_path, args.codec, args.output_root, level=args.level, verify_mode=args.mode)
+            print_json(result)
+            return 0 if result["ok"] else 1
+        if args.cmd == "verify":
+            result = registry.verify_file(args.artifact_path, args.canonical_path, args.codec, verify_mode=args.mode)
+            print_json(result)
+            return 0 if result["ok"] else 1
+        if args.cmd == "decode":
+            sys.stdout.buffer.write(registry.decode_file(args.artifact_path, args.codec))
+            return 0
+    except PythonCodecError as exc:
+        print_json({"status": "error", "ok": False, "error": str(exc)})
+        return 1
     return 2
 
 

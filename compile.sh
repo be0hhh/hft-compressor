@@ -21,11 +21,17 @@ if ! command -v cmake >/dev/null 2>&1; then
   exit 1
 fi
 
-CLANG_CXX="$(command -v clang++ || true)"
-if [[ -z "$CLANG_CXX" ]]; then
-  echo "Clang toolchain is required: install clang++ in WSL." >&2
+CXET_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+if ! selected_paths="$(cmake -P "$CXET_ROOT/cmake/CxetToolchain.cmake")"; then
+  echo "Prepare the canonical CXET toolchain before using the family build wrapper." >&2
   exit 1
 fi
+mapfile -t selected_compilers <<< "$selected_paths"
+if [[ ${#selected_compilers[@]} -ne 2 ]]; then
+  echo "The canonical CXET compiler selector returned an invalid pair." >&2
+  exit 1
+fi
+CLANG_CXX="${selected_compilers[1]}"
 
 if [[ -f build/CMakeCache.txt ]]; then
   CACHED_SOURCE="$(grep -E '^CMAKE_HOME_DIRECTORY:INTERNAL=' build/CMakeCache.txt 2>/dev/null | cut -d= -f2- || true)"
