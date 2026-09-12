@@ -33,20 +33,91 @@ if [[ ${#selected_compilers[@]} -ne 2 ]]; then
 fi
 CLANG_CXX="${selected_compilers[1]}"
 
+reset_build_state_preserving_dependency_cache() {
+  local build_dir="$SCRIPT_DIR/build"
+  if [[ ! -d "$build_dir" ]]; then
+    return 0
+  fi
+  if [[ -L "$build_dir" ]]; then
+    echo "Refusing to clean a symlinked build directory: $build_dir" >&2
+    exit 1
+  fi
+
+  local resolved
+  resolved="$(cd "$build_dir" && pwd -P)"
+  if [[ "$resolved" != "$build_dir" ]]; then
+    echo "Refusing to clean unexpected build directory: $resolved" >&2
+    exit 1
+  fi
+
+  local deps_root="$build_dir/_deps"
+  local dependency_dir populate_prefix stamp_dir
+  if [[ -L "$deps_root" ]]; then
+    echo "Refusing to clean a symlinked dependency root: $deps_root" >&2
+    exit 1
+  fi
+
+  if [[ -d "$deps_root" ]]; then
+    shopt -s nullglob
+    for dependency_dir in "$deps_root"/*-build "$deps_root"/*-subbuild; do
+      if [[ -L "$dependency_dir" ]]; then
+        echo "Refusing to clean a symlinked dependency build directory: $dependency_dir" >&2
+        exit 1
+      fi
+    done
+    for dependency_dir in "$deps_root"/*-subbuild; do
+      for populate_prefix in "$dependency_dir"/*-populate-prefix; do
+        if [[ -L "$populate_prefix" ]]; then
+          echo "Refusing to clean a symlinked dependency populate prefix: $populate_prefix" >&2
+          exit 1
+        fi
+        if [[ -L "$populate_prefix/src" ]]; then
+          echo "Refusing to clean a symlinked dependency populate source directory: $populate_prefix/src" >&2
+          exit 1
+        fi
+      done
+    done
+    shopt -u nullglob
+  fi
+
+  find "$build_dir" -mindepth 1 -maxdepth 1 ! -name _deps -exec rm -rf -- {} +
+  if [[ ! -d "$deps_root" ]]; then
+    return 0
+  fi
+
+  shopt -s nullglob
+  for dependency_dir in "$deps_root"/*-build; do
+    rm -rf -- "$dependency_dir"
+  done
+  for dependency_dir in "$deps_root"/*-subbuild; do
+    rm -rf -- \
+      "$dependency_dir/CMakeCache.txt" \
+      "$dependency_dir/CMakeFiles" \
+      "$dependency_dir/CMakeLists.txt" \
+      "$dependency_dir/Makefile" \
+      "$dependency_dir/build.ninja" \
+      "$dependency_dir/cmake_install.cmake" \
+      "$dependency_dir/.ninja_deps" \
+      "$dependency_dir/.ninja_log"
+    for stamp_dir in "$dependency_dir"/*-populate-prefix/src/*-populate-stamp; do
+      rm -rf -- "$stamp_dir"
+    done
+    rm -rf -- "$dependency_dir"/*-populate-prefix/tmp
+  done
+  shopt -u nullglob
+}
+
 if [[ -f build/CMakeCache.txt ]]; then
   CACHED_SOURCE="$(grep -E '^CMAKE_HOME_DIRECTORY:INTERNAL=' build/CMakeCache.txt 2>/dev/null | cut -d= -f2- || true)"
+  CACHED_BUILD="$(grep -E '^CMAKE_CACHEFILE_DIR:INTERNAL=' build/CMakeCache.txt 2>/dev/null | cut -d= -f2- || true)"
   CACHED_CXX="$(grep -E '^CMAKE_CXX_COMPILER:FILEPATH=' build/CMakeCache.txt 2>/dev/null | cut -d= -f2- || true)"
-  if [[ -n "$CACHED_SOURCE" && "$CACHED_SOURCE" != "$SCRIPT_DIR" ]]; then
-    BUILD_DIR="$(cd build && pwd)"
-    if [[ "$BUILD_DIR" != "$SCRIPT_DIR/build" ]]; then
-      echo "Refusing to remove unexpected build directory: $BUILD_DIR" >&2
-      exit 1
-    fi
-    echo "Build was configured from a different path. Removing hft-compressor/build/ to reconfigure."
-    rm -rf build
+  if [[ (-n "$CACHED_SOURCE" && "$CACHED_SOURCE" != "$SCRIPT_DIR") ||
+        (-n "$CACHED_BUILD" && "$CACHED_BUILD" != "$SCRIPT_DIR/build") ]]; then
+    echo "Build was configured from a different path. Resetting generated state while preserving dependency sources and downloads."
+    reset_build_state_preserving_dependency_cache
   elif [[ -n "$CACHED_CXX" && "$CACHED_CXX" != "$CLANG_CXX" ]]; then
-    echo "Build was configured with a non-Clang or different compiler. Removing hft-compressor/build/ to reconfigure with Clang."
-    rm -rf build
+    echo "Build was configured with a non-Clang or different compiler. Resetting generated state while preserving dependency sources and downloads."
+    reset_build_state_preserving_dependency_cache
   fi
 fi
 
