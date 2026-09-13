@@ -20,12 +20,12 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      - name: Require private CXETCPP checkout key
+      - name: Require private CXETCPP checkout token
         env:
-          CI_CXETCPP_SSH_KEY: ${{ secrets.CI_CXETCPP_SSH_KEY }}
+          CI_FAMILY_READ_TOKEN: ${{ secrets.CI_FAMILY_READ_TOKEN }}
         run: |
-          if [ -z "$CI_CXETCPP_SSH_KEY" ]; then
-            echo "::error::CI_CXETCPP_SSH_KEY is required to obtain the canonical compiler pin and bootstrap. Fork pull requests cannot supply this secret."
+          if [ -z "$CI_FAMILY_READ_TOKEN" ]; then
+            echo "::error::CI_FAMILY_READ_TOKEN is required to obtain the canonical compiler pin and bootstrap. Fork pull requests cannot supply this secret."
             exit 1
           fi
 
@@ -34,7 +34,7 @@ jobs:
         with:
           repository: be0hhh/CXETCPP
           ref: main
-          ssh-key: ${{ secrets.CI_CXETCPP_SSH_KEY }}
+          token: ${{ secrets.CI_FAMILY_READ_TOKEN }}
           path: source/CXETCPP
           submodules: false
           sparse-checkout: |
