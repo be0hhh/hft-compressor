@@ -9,8 +9,6 @@
 #include <system_error>
 #include <vector>
 
-#include <simdjson.h>
-
 #include "../../Common/CompressionInternals.hpp"
 #include "../../Common/Timing.hpp"
 #include "../../Container/Hfc/Format.hpp"
@@ -23,10 +21,6 @@ constexpr std::uint32_t kMagic = 0x4b544243u; // B T C K little-endian wire
 constexpr std::uint16_t kLegacyArtifactVersion = 1u;
 constexpr std::uint16_t kCurrentArtifactVersion = 2u;
 constexpr std::size_t kHeaderBytes = 160u;
-
-bool isSimdjsonEmpty(simdjson::error_code error) noexcept {
-    return error == simdjson::EMPTY || static_cast<int>(error) == 12;
-}
 
 struct Row { std::int64_t bid{0}, bidQty{0}, ask{0}, askQty{0}, ts{0}; };
 struct Header {
@@ -46,7 +40,23 @@ struct Cursor {
     std::string_view text{}; std::size_t pos{0};
     void ws() noexcept { while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\r')) ++pos; }
     bool ch(char c) noexcept { ws(); if (pos >= text.size() || text[pos] != c) return false; ++pos; return true; }
-    bool i64(std::int64_t& out) noexcept { ws(); const char* b = text.data() + pos; const char* e = text.data() + text.size(); const auto [p, ec] = std::from_chars(b, e, out); if (ec != std::errc{} || p == b) return false; pos = static_cast<std::size_t>(p - text.data()); return true; }
+    bool i64(std::int64_t& out) noexcept {
+        ws();
+        if (pos >= text.size()) return false;
+        const std::size_t beginPos = pos;
+        if (text[pos] == '-') { ++pos; if (pos >= text.size()) return false; }
+        if (text[pos] == '0') {
+            ++pos;
+            if (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') return false;
+        } else {
+            if (text[pos] < '1' || text[pos] > '9') return false;
+            do { ++pos; } while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9');
+        }
+        const char* b = text.data() + beginPos;
+        const char* e = text.data() + pos;
+        const auto [p, ec] = std::from_chars(b, e, out);
+        return ec == std::errc{} && p == e;
+    }
     bool end() noexcept { ws(); return pos == text.size(); }
 };
 
@@ -56,34 +66,23 @@ bool parseLine(std::string_view line, Row& out) noexcept {
 }
 
 bool parseRows(std::span<const std::uint8_t> input, std::vector<Row>& rows) {
-    simdjson::dom::parser parser;
-    simdjson::padded_string padded{reinterpret_cast<const char*>(input.data()), input.size()};
-    auto docs = parser.parse_many(padded.data(), padded.size(), padded.size());
+    if (input.empty()) return false;
     std::int64_t prevTs = 0;
     bool have = false;
-    for (auto docResult : docs) {
-        simdjson::dom::element doc;
-        const auto docError = docResult.get(doc);
-        if (isSimdjsonEmpty(docError)) continue;
-        if (docError != simdjson::SUCCESS || !doc.is_array()) return false;
-        simdjson::dom::array values;
-        if (doc.get_array().get(values) != simdjson::SUCCESS || values.size() != 5u) return false;
+    std::size_t lineStart = 0;
+    while (lineStart < input.size()) {
+        std::size_t lineEnd = lineStart;
+        while (lineEnd < input.size() && input[lineEnd] != static_cast<std::uint8_t>('\n')) ++lineEnd;
+        std::string_view line{reinterpret_cast<const char*>(input.data() + lineStart), lineEnd - lineStart};
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (line.empty()) return false;
         Row row{};
-        std::size_t index = 0;
-        for (auto value : values) {
-            std::int64_t parsed = 0;
-            if (value.get_int64().get(parsed) != simdjson::SUCCESS) return false;
-            if (index == 0u) row.bid = parsed;
-            else if (index == 1u) row.bidQty = parsed;
-            else if (index == 2u) row.ask = parsed;
-            else if (index == 3u) row.askQty = parsed;
-            else row.ts = parsed;
-            ++index;
-        }
+        if (!parseLine(line, row)) return false;
         if (have && row.ts < prevTs) return false;
         prevTs = row.ts;
         have = true;
         rows.push_back(row);
+        lineStart = lineEnd + (lineEnd < input.size() ? 1u : 0u);
     }
     return !rows.empty();
 }

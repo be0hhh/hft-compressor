@@ -54,7 +54,7 @@ bool validSide(std::int64_t side) noexcept {
     return side == 0 || side == 1;
 }
 
-bool parseTradeLine(std::string_view line, ReplayTradeRecord& out) noexcept {
+bool parseTradeLine(std::string_view line, ReplayBatchTradeRecord& out) noexcept {
     JsonCursor p{line};
     return p.consume('[')
         && p.parseInt64(out.priceE8) && p.consume(',')
@@ -64,7 +64,7 @@ bool parseTradeLine(std::string_view line, ReplayTradeRecord& out) noexcept {
         && p.consume(']') && p.finish();
 }
 
-bool parseBookTickerLine(std::string_view line, ReplayBookTickerRecord& out) noexcept {
+bool parseBookTickerLine(std::string_view line, ReplayBatchBookTickerRecord& out) noexcept {
     JsonCursor p{line};
     return p.consume('[')
         && p.parseInt64(out.bidPriceE8) && p.consume(',')
@@ -86,7 +86,7 @@ bool parseDepthLevel(JsonCursor& p, ReplayDepthLevel& out) noexcept {
 bool parseDepthLine(std::string_view line, ReplayRecordBatch& batch) noexcept {
     JsonCursor p{line};
     if (!p.consume('[') || !p.peek('[')) return false;
-    ReplayDepthRecord row{};
+    ReplayBatchDepthRecord row{};
     row.firstLevelIndex = static_cast<std::uint32_t>(batch.depthLevels.size());
     while (p.peek('[')) {
         ReplayDepthLevel level{};
@@ -101,13 +101,13 @@ bool parseDepthLine(std::string_view line, ReplayRecordBatch& batch) noexcept {
 
 bool parseLine(StreamType streamType, std::string_view line, ReplayRecordBatch& batch) noexcept {
     if (streamType == StreamType::Trades) {
-        ReplayTradeRecord row{};
+        ReplayBatchTradeRecord row{};
         if (!parseTradeLine(line, row)) return false;
         batch.trades.push_back(row);
         return true;
     }
     if (streamType == StreamType::BookTicker) {
-        ReplayBookTickerRecord row{};
+        ReplayBatchBookTickerRecord row{};
         if (!parseBookTickerLine(line, row)) return false;
         batch.bookTickers.push_back(row);
         return true;

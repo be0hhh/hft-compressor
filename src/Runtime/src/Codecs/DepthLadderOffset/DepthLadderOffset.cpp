@@ -10,8 +10,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include <simdjson.h>
-
 #include "../../Common/CompressionInternals.hpp"
 #include "../../Common/Timing.hpp"
 #include "hft_compressor/Metrics.hpp"
@@ -24,9 +22,6 @@ constexpr std::uint16_t kLegacyArtifactVersion = 2u;
 constexpr std::uint16_t kCurrentArtifactVersion = 3u;
 constexpr std::size_t kHeaderBytes = 176u;
 
-bool isSimdjsonEmpty(simdjson::error_code error) noexcept {
-    return error == simdjson::EMPTY || static_cast<int>(error) == 12;
-}
 constexpr std::uint32_t kHotQtyCount = 64u;
 constexpr std::uint32_t kInspectBatchLimit = 128u;
 
@@ -47,7 +42,23 @@ struct Cursor {
     void ws() noexcept { while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\r')) ++pos; }
     bool ch(char c) noexcept { ws(); if (pos >= text.size() || text[pos] != c) return false; ++pos; return true; }
     bool peek(char c) noexcept { ws(); return pos < text.size() && text[pos] == c; }
-    bool i64(std::int64_t& out) noexcept { ws(); const char* b = text.data() + pos; const char* e = text.data() + text.size(); const auto [p, ec] = std::from_chars(b, e, out); if (ec != std::errc{} || p == b) return false; pos = static_cast<std::size_t>(p - text.data()); return true; }
+    bool i64(std::int64_t& out) noexcept {
+        ws();
+        if (pos >= text.size()) return false;
+        const std::size_t beginPos = pos;
+        if (text[pos] == '-') { ++pos; if (pos >= text.size()) return false; }
+        if (text[pos] == '0') {
+            ++pos;
+            if (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') return false;
+        } else {
+            if (text[pos] < '1' || text[pos] > '9') return false;
+            do { ++pos; } while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9');
+        }
+        const char* b = text.data() + beginPos;
+        const char* e = text.data() + pos;
+        const auto [p, ec] = std::from_chars(b, e, out);
+        return ec == std::errc{} && p == e;
+    }
     bool end() noexcept { ws(); return pos == text.size(); }
 };
 
@@ -65,47 +76,23 @@ bool parseLine(std::string_view line, Batch& out) noexcept {
 }
 
 bool parseBatches(std::span<const std::uint8_t> input, std::vector<Batch>& out) {
-    simdjson::dom::parser parser;
-    simdjson::padded_string padded{reinterpret_cast<const char*>(input.data()), input.size()};
-    auto docs = parser.parse_many(padded.data(), padded.size(), padded.size());
+    if (input.empty()) return false;
     std::int64_t previousTs = 0;
     bool havePrevious = false;
-    for (auto docResult : docs) {
-        simdjson::dom::element doc;
-        const auto docError = docResult.get(doc);
-        if (isSimdjsonEmpty(docError)) continue;
-        if (docError != simdjson::SUCCESS || !doc.is_array()) return false;
-        simdjson::dom::array values;
-        if (doc.get_array().get(values) != simdjson::SUCCESS || values.size() < 2u) return false;
+    std::size_t lineStart = 0;
+    while (lineStart < input.size()) {
+        std::size_t lineEnd = lineStart;
+        while (lineEnd < input.size() && input[lineEnd] != static_cast<std::uint8_t>('\n')) ++lineEnd;
+        std::string_view line{reinterpret_cast<const char*>(input.data() + lineStart), lineEnd - lineStart};
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (line.empty()) return false;
         Batch batch{};
-        std::size_t index = 0;
-        const auto lastIndex = values.size() - 1u;
-        for (auto value : values) {
-            if (index == lastIndex) {
-                if (value.get_int64().get(batch.ts) != simdjson::SUCCESS) return false;
-            } else {
-                simdjson::dom::array levelValues;
-                if (value.get_array().get(levelValues) != simdjson::SUCCESS || levelValues.size() != 3u) return false;
-                Level level{};
-                std::size_t levelIndex = 0;
-                for (auto field : levelValues) {
-                    std::int64_t parsed = 0;
-                    if (field.get_int64().get(parsed) != simdjson::SUCCESS) return false;
-                    if (levelIndex == 0u) level.price = parsed;
-                    else if (levelIndex == 1u) level.qty = parsed;
-                    else level.side = parsed;
-                    ++levelIndex;
-                }
-                if (!validSide(level.side)) return false;
-                batch.levels.push_back(level);
-            }
-            ++index;
-        }
-        if (batch.levels.empty()) return false;
+        if (!parseLine(line, batch)) return false;
         if (havePrevious && batch.ts < previousTs) return false;
         previousTs = batch.ts;
         havePrevious = true;
         out.push_back(std::move(batch));
+        lineStart = lineEnd + (lineEnd < input.size() ? 1u : 0u);
     }
     return !out.empty();
 }

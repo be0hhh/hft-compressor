@@ -2,7 +2,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "hft_compressor/CApi.hpp"
@@ -40,6 +42,68 @@ struct HftMacCase {
     const char* outputSlug;
     hft_compressor::StreamType streamType;
 };
+
+struct CustomJsonlCase {
+    const char* id;
+    const char* inputName;
+    const char* pipelineId;
+    const char* input;
+    const char* decoded;
+    hft_compressor::StreamType streamType;
+};
+
+void runCustomJsonlCase(const CustomJsonlCase& testCase, const fs::path& dir) {
+    const auto caseDir = dir / "custom_jsonl" / testCase.id;
+    fs::create_directories(caseDir);
+    const auto input = caseDir / testCase.inputName;
+    writeFile(input, testCase.input);
+    assert(hft_compressor::inferStreamTypeFromPath(input) == testCase.streamType);
+
+    hft_compressor::CompressionRequest request{};
+    request.inputPath = input;
+    request.outputRoot = dir / "custom_jsonl_out" / testCase.id;
+    request.pipelineId = testCase.pipelineId;
+    const auto result = hft_compressor::compress(request);
+    const bool byteExact = std::string_view{testCase.input} == std::string_view{testCase.decoded};
+    assert(result.status == (byteExact ? hft_compressor::Status::Ok : hft_compressor::Status::DecodeError));
+    assert(result.roundtripOk == byteExact);
+
+    std::string decoded;
+    assert(hft_compressor::isOk(hft_compressor::inspectCompressedArtifact(
+        result.outputPath,
+        testCase.pipelineId,
+        "canonical-jsonl",
+        [&decoded](std::span<const std::uint8_t> block) {
+            decoded.append(reinterpret_cast<const char*>(block.data()), block.size());
+            return true;
+        })));
+    assert(decoded == testCase.decoded);
+
+    hft_compressor::DecodeVerifyRequest verifyRequest{};
+    verifyRequest.compressedPath = result.outputPath;
+    verifyRequest.canonicalPath = input;
+    verifyRequest.pipelineId = testCase.pipelineId;
+    verifyRequest.verifyMode = hft_compressor::VerifyMode::RecordExact;
+    const auto verifyResult = hft_compressor::decodeAndVerify(verifyRequest);
+    assert(hft_compressor::isOk(verifyResult.status));
+    assert(verifyResult.recordExact);
+}
+
+void runRejectedCustomJsonlCase(const char* id,
+                                const char* inputName,
+                                const char* pipelineId,
+                                std::string_view jsonl,
+                                const fs::path& dir) {
+    const auto caseDir = dir / "rejected_custom_jsonl" / id;
+    fs::create_directories(caseDir);
+    const auto input = caseDir / inputName;
+    writeFile(input, std::string{jsonl});
+    hft_compressor::CompressionRequest request{};
+    request.inputPath = input;
+    request.outputRoot = dir / "rejected_custom_jsonl_out" / id;
+    request.pipelineId = pipelineId;
+    assert(hft_compressor::compress(request).status == hft_compressor::Status::CorruptData);
+}
 
 void runHftMacCase(const HftMacCase& codec, const fs::path& dir) {
     const auto input = dir / codec.inputName;
@@ -207,14 +271,96 @@ int main() {
     writeFile(input, "[1,2,1,100]\n[2,3,0,200]\n");
 
 
-    const auto spacedHftMacInput = dir / "hftmac_spaced" / "trades.jsonl";
-    fs::create_directories(spacedHftMacInput.parent_path());
-    writeFile(spacedHftMacInput, "[1, 2, 1, 100]\n");
-    hft_compressor::CompressionRequest spacedHftMacRequest{};
-    spacedHftMacRequest.inputPath = spacedHftMacInput;
-    spacedHftMacRequest.outputRoot = dir / "hftmac_spaced_out";
-    spacedHftMacRequest.pipelineId = "hftmac.trades_grouped_delta_qtydict_math_v3";
-    assert(hft_compressor::isOk(hft_compressor::compress(spacedHftMacRequest).status));
+    const CustomJsonlCase customJsonlCases[]{
+        {"trades_lf", "trades.jsonl", "hftmac.trades_grouped_delta_qtydict_math_v3", "[1,2,1,100]\n[2,3,0,200]\n", "[1,2,1,100]\n[2,3,0,200]\n", StreamType::Trades},
+        {"trades_crlf", "trades.jsonl", "hftmac.trades_grouped_delta_qtydict_math_v3", "[1,2,1,100]\r\n[2,3,0,200]\r\n", "[1,2,1,100]\r\n[2,3,0,200]\r\n", StreamType::Trades},
+        {"trades_no_final_newline", "trades.jsonl", "hftmac.trades_grouped_delta_qtydict_math_v3", "[1,2,1,100]", "[1,2,1,100]\n", StreamType::Trades},
+        {"trades_spaces", "trades.jsonl", "hftmac.trades_grouped_delta_qtydict_math_v3", " [ 1, 2, 1, 100 ] \n", "[1,2,1,100]\n", StreamType::Trades},
+        {"bookticker_lf", "bookticker.jsonl", "hftmac.bookticker_delta_mask_v2", "[100,10,110,20,1000]\n[101,9,111,22,1001]\n", "[100,10,110,20,1000]\n[101,9,111,22,1001]\n", StreamType::BookTicker},
+        {"bookticker_crlf", "bookticker.jsonl", "hftmac.bookticker_delta_mask_v2", "[100,10,110,20,1000]\r\n", "[100,10,110,20,1000]\n", StreamType::BookTicker},
+        {"bookticker_no_final_newline", "bookticker.jsonl", "hftmac.bookticker_delta_mask_v2", "[100,10,110,20,1000]", "[100,10,110,20,1000]\n", StreamType::BookTicker},
+        {"bookticker_spaces", "bookticker.jsonl", "hftmac.bookticker_delta_mask_v2", " [ 100, 10, 110, 20, 1000 ] \n", "[100,10,110,20,1000]\n", StreamType::BookTicker},
+        {"depth_lf", "depth.jsonl", "hftmac.depth_ladder_offset_v3", "[[100,10,0],[110,20,1],1000]\n[[100,9,0],[111,22,1],1001]\n", "[[100,10,0],[110,20,1],1000]\n[[100,9,0],[111,22,1],1001]\n", StreamType::Depth},
+        {"depth_crlf", "depth.jsonl", "hftmac.depth_ladder_offset_v3", "[[100,10,0],[110,20,1],1000]\r\n", "[[100,10,0],[110,20,1],1000]\n", StreamType::Depth},
+        {"depth_no_final_newline", "depth.jsonl", "hftmac.depth_ladder_offset_v3", "[[100,10,0],[110,20,1],1000]", "[[100,10,0],[110,20,1],1000]\n", StreamType::Depth},
+        {"depth_spaces", "depth.jsonl", "hftmac.depth_ladder_offset_v3", " [ [ 100, 10, 0 ], [ 110, 20, 1 ], 1000 ] \n", "[[100,10,0],[110,20,1],1000]\n", StreamType::Depth},
+    };
+    for (const auto& testCase : customJsonlCases) runCustomJsonlCase(testCase, dir);
+
+    runRejectedCustomJsonlCase("trade_missing_field", "trades.jsonl", "hftmac.trades_grouped_delta_qtydict_math_v3", "[1,2,1]\n", dir);
+    runRejectedCustomJsonlCase("trade_overflow", "trades.jsonl", "hftmac.trades_grouped_delta_qtydict_math_v3", "[9223372036854775808,2,1,100]\n", dir);
+    runRejectedCustomJsonlCase("trade_leading_zero", "trades.jsonl", "hftmac.trades_grouped_delta_qtydict_math_v3", "[01,2,1,100]\n", dir);
+    runRejectedCustomJsonlCase("trade_bad_side", "trades.jsonl", "hftmac.trades_grouped_delta_qtydict_math_v3", "[1,2,2,100]\n", dir);
+    runRejectedCustomJsonlCase("trade_nonpositive_price", "trades.jsonl", "hftmac.trades_grouped_delta_qtydict_math_v3", "[0,2,1,100]\n", dir);
+    runRejectedCustomJsonlCase("trade_nonpositive_qty", "trades.jsonl", "hftmac.trades_grouped_delta_qtydict_math_v3", "[1,0,1,100]\n", dir);
+    runRejectedCustomJsonlCase("trade_decreasing_ts", "trades.jsonl", "hftmac.trades_grouped_delta_qtydict_math_v3", "[1,2,1,101]\n[2,3,0,100]\n", dir);
+    runRejectedCustomJsonlCase("bookticker_extra_field", "bookticker.jsonl", "hftmac.bookticker_delta_mask_v2", "[100,10,110,20,1000,7]\n", dir);
+    runRejectedCustomJsonlCase("bookticker_overflow", "bookticker.jsonl", "hftmac.bookticker_delta_mask_v2", "[9223372036854775808,10,110,20,1000]\n", dir);
+    runRejectedCustomJsonlCase("bookticker_leading_zero", "bookticker.jsonl", "hftmac.bookticker_delta_mask_v2", "[0100,10,110,20,1000]\n", dir);
+    runRejectedCustomJsonlCase("bookticker_decreasing_ts", "bookticker.jsonl", "hftmac.bookticker_delta_mask_v2", "[100,10,110,20,1001]\n[100,10,110,20,1000]\n", dir);
+    runRejectedCustomJsonlCase("depth_bad_level", "depth.jsonl", "hftmac.depth_ladder_offset_v3", "[[100,10],1000]\n", dir);
+    runRejectedCustomJsonlCase("depth_overflow", "depth.jsonl", "hftmac.depth_ladder_offset_v3", "[[9223372036854775808,10,0],1000]\n", dir);
+    runRejectedCustomJsonlCase("depth_leading_zero", "depth.jsonl", "hftmac.depth_ladder_offset_v3", "[[0100,10,0],1000]\n", dir);
+    runRejectedCustomJsonlCase("depth_bad_side", "depth.jsonl", "hftmac.depth_ladder_offset_v3", "[[100,10,2],1000]\n", dir);
+    runRejectedCustomJsonlCase("depth_decreasing_ts", "depth.jsonl", "hftmac.depth_ladder_offset_v3", "[[100,10,0],1001]\n[[100,9,0],1000]\n", dir);
+
+    const auto flatDepthInput = dir / "flat_depth_batch" / "depth.jsonl";
+    fs::create_directories(flatDepthInput.parent_path());
+    writeFile(flatDepthInput, "[[100,10,0],[101,20,1],1000]\n[[99,5,0],1001]\n");
+    hft_compressor::CompressionRequest flatDepthRequest{};
+    flatDepthRequest.inputPath = flatDepthInput;
+    flatDepthRequest.outputRoot = dir / "flat_depth_batch_out";
+    flatDepthRequest.pipelineId = "std.raw_jsonl_blocks_v1";
+    const auto flatDepthResult = hft_compressor::compress(flatDepthRequest);
+    assert(hft_compressor::isOk(flatDepthResult.status));
+
+    hft_compressor::ReplayArtifactRequest flatDepthArtifactRequest{};
+    flatDepthArtifactRequest.compressedRoot = flatDepthRequest.outputRoot;
+    flatDepthArtifactRequest.sessionDir = flatDepthInput.parent_path();
+    flatDepthArtifactRequest.streamType = StreamType::Depth;
+    flatDepthArtifactRequest.preferredPipelineId = flatDepthRequest.pipelineId;
+    hft_compressor::ReplayDecodeRequest flatDepthDecodeRequest{};
+    flatDepthDecodeRequest.artifact = flatDepthArtifactRequest;
+    flatDepthDecodeRequest.maxRecordsPerBatch = 2u;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecordBatches(
+        flatDepthDecodeRequest,
+        [](const hft_compressor::ReplayRecordBatch& batch) {
+            assert(batch.depths.size() == 2u);
+            assert(batch.depthLevels.size() == 3u);
+            assert(batch.depths[0].tsNs == 1000);
+            assert(batch.depths[0].firstLevelIndex == 0u);
+            assert(batch.depths[0].levelCount == 2u);
+            assert(batch.depths[1].tsNs == 1001);
+            assert(batch.depths[1].firstLevelIndex == 2u);
+            assert(batch.depths[1].levelCount == 1u);
+            assert(batch.depthLevels[0].priceE8 == 100);
+            assert(batch.depthLevels[0].qtyE8 == 10);
+            assert(batch.depthLevels[0].side == 0);
+            assert(batch.depthLevels[1].priceE8 == 101);
+            assert(batch.depthLevels[1].qtyE8 == 20);
+            assert(batch.depthLevels[1].side == 1);
+            assert(batch.depthLevels[2].priceE8 == 99);
+            assert(batch.depthLevels[2].qtyE8 == 5);
+            assert(batch.depthLevels[2].side == 0);
+            return true;
+        })));
+
+    std::vector<hft_compressor::ReplayRecord> owningDepthRecords;
+    assert(hft_compressor::isOk(hft_compressor::decodeReplayRecords(
+        flatDepthArtifactRequest,
+        [&owningDepthRecords](const hft_compressor::ReplayRecord& record) {
+            owningDepthRecords.push_back(record);
+            return true;
+        })));
+    assert(owningDepthRecords.size() == 2u);
+    assert(owningDepthRecords[0].kind == hft_compressor::ReplayRecordKind::Depth);
+    assert(owningDepthRecords[0].depth.tsNs == 1000);
+    assert(owningDepthRecords[0].depth.levels.size() == 2u);
+    assert(owningDepthRecords[0].depth.levels[1].priceE8 == 101);
+    assert(owningDepthRecords[1].kind == hft_compressor::ReplayRecordKind::Depth);
+    assert(owningDepthRecords[1].depth.tsNs == 1001);
+    assert(owningDepthRecords[1].depth.levels.size() == 1u);
+    assert(owningDepthRecords[1].depth.levels[0].priceE8 == 99);
 
     hft_compressor::CompressionRequest currentTradeRequest{};
     currentTradeRequest.inputPath = input;
@@ -663,9 +809,6 @@ int main() {
 #endif
     return 0;
 }
-
-
-
 
 
 

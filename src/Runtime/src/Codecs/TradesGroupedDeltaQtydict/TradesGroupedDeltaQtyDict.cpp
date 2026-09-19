@@ -12,8 +12,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include <simdjson.h>
-
 #include "../../Common/CompressionInternals.hpp"
 #include "../../Common/Timing.hpp"
 #include "../../Container/Hfc/Format.hpp"
@@ -28,9 +26,6 @@ constexpr std::uint16_t kCurrentArtifactVersion = 3u;
 constexpr std::size_t kFileHeaderBytes = 96u;
 constexpr std::size_t kChunkHeaderBytes = 160u;
 
-bool isSimdjsonEmpty(simdjson::error_code error) noexcept {
-    return error == simdjson::EMPTY || static_cast<int>(error) == 12;
-}
 constexpr std::uint32_t kDefaultChunkRecords = 16u * 1024u;
 constexpr std::uint32_t kHotQtyCount = 64u;
 constexpr std::uint32_t kMaxHotQtyCount = 128u;
@@ -409,11 +404,24 @@ struct JsonCursor {
     bool parseInt64(std::int64_t& out) noexcept {
         skipSpaces();
         if (pos >= text.size()) return false;
-        const char* begin = text.data() + pos;
-        const char* end = text.data() + text.size();
+        const std::size_t beginPos = pos;
+        if (text[pos] == '-') {
+            ++pos;
+            if (pos >= text.size()) return false;
+        }
+        if (text[pos] == '0') {
+            ++pos;
+            if (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') return false;
+        } else {
+            if (text[pos] < '1' || text[pos] > '9') return false;
+            do {
+                ++pos;
+            } while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9');
+        }
+        const char* begin = text.data() + beginPos;
+        const char* end = text.data() + pos;
         const auto [ptr, ec] = std::from_chars(begin, end, out);
-        if (ec != std::errc{} || ptr == begin) return false;
-        pos = static_cast<std::size_t>(ptr - text.data());
+        if (ec != std::errc{} || ptr != end) return false;
         return true;
     }
 
@@ -435,34 +443,23 @@ bool parseTradeLine(std::string_view line, Trade& out) noexcept {
 }
 
 bool parseTrades(std::span<const std::uint8_t> input, std::vector<Trade>& out) {
-    simdjson::dom::parser parser;
-    simdjson::padded_string padded{reinterpret_cast<const char*>(input.data()), input.size()};
-    auto docs = parser.parse_many(padded.data(), padded.size(), padded.size());
+    if (input.empty()) return false;
     std::int64_t previousTs = 0;
     bool havePrevious = false;
-    for (auto docResult : docs) {
-        simdjson::dom::element doc;
-        const auto docError = docResult.get(doc);
-        if (isSimdjsonEmpty(docError)) continue;
-        if (docError != simdjson::SUCCESS || !doc.is_array()) return false;
-        simdjson::dom::array values;
-        if (doc.get_array().get(values) != simdjson::SUCCESS || values.size() != 4u) return false;
+    std::size_t lineStart = 0;
+    while (lineStart < input.size()) {
+        std::size_t lineEnd = lineStart;
+        while (lineEnd < input.size() && input[lineEnd] != static_cast<std::uint8_t>('\n')) ++lineEnd;
+        std::string_view line{reinterpret_cast<const char*>(input.data() + lineStart), lineEnd - lineStart};
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (line.empty()) return false;
         Trade trade{};
-        std::size_t index = 0;
-        for (auto value : values) {
-            std::int64_t parsed = 0;
-            if (value.get_int64().get(parsed) != simdjson::SUCCESS) return false;
-            if (index == 0u) trade.price = parsed;
-            else if (index == 1u) trade.qty = parsed;
-            else if (index == 2u) trade.side = parsed;
-            else trade.tsNs = parsed;
-            ++index;
-        }
-        if (trade.price <= 0 || trade.qty <= 0 || (trade.side != 0 && trade.side != 1)) return false;
+        if (!parseTradeLine(line, trade)) return false;
         if (havePrevious && trade.tsNs < previousTs) return false;
         previousTs = trade.tsNs;
         havePrevious = true;
         out.push_back(trade);
+        lineStart = lineEnd + (lineEnd < input.size() ? 1u : 0u);
     }
     return !out.empty();
 }

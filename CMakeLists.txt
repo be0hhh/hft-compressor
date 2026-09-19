@@ -218,6 +218,7 @@ if(HFT_COMPRESSOR_BUILD_TESTS)
         CXX_EXTENSIONS OFF
     )
     target_link_libraries(hft-compressor-tests PRIVATE hft_compressor_core)
+    target_compile_options(hft-compressor-tests PRIVATE -UNDEBUG)
     if(NOT HFT_COMPRESSOR_PORTABLE_BUILD)
         target_compile_options(hft-compressor-tests PRIVATE
             $<$<CONFIG:Release>:-O3>

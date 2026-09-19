@@ -22,14 +22,14 @@ struct ReplayDecodeRequest {
     std::size_t maxRecordsPerBatch{4096u};
 };
 
-struct ReplayTradeRecord {
+struct ReplayBatchTradeRecord {
     std::int64_t tsNs{0};
     std::int64_t priceE8{0};
     std::int64_t qtyE8{0};
     std::int64_t side{0};
 };
 
-struct ReplayBookTickerRecord {
+struct ReplayBatchBookTickerRecord {
     std::int64_t tsNs{0};
     std::int64_t bidPriceE8{0};
     std::int64_t bidQtyE8{0};
@@ -37,13 +37,7 @@ struct ReplayBookTickerRecord {
     std::int64_t askQtyE8{0};
 };
 
-struct ReplayDepthLevel {
-    std::int64_t priceE8{0};
-    std::int64_t qtyE8{0};
-    std::int64_t side{0};
-};
-
-struct ReplayDepthRecord {
+struct ReplayBatchDepthRecord {
     std::int64_t tsNs{0};
     std::uint32_t firstLevelIndex{0};
     std::uint32_t levelCount{0};
@@ -54,9 +48,9 @@ struct ReplayRecordBatch {
     std::uint64_t firstLineNumber{0};
     std::uint64_t lineCount{0};
     std::uint64_t decodedBytes{0};
-    std::vector<ReplayTradeRecord> trades{};
-    std::vector<ReplayBookTickerRecord> bookTickers{};
-    std::vector<ReplayDepthRecord> depths{};
+    std::vector<ReplayBatchTradeRecord> trades{};
+    std::vector<ReplayBatchBookTickerRecord> bookTickers{};
+    std::vector<ReplayBatchDepthRecord> depths{};
     std::vector<ReplayDepthLevel> depthLevels{};
 
     void clearRows() noexcept;
