@@ -119,12 +119,12 @@ jobs:
           repository: be0hhh/CXETCPP
           ref: ${{ needs.snapshot.outputs.cxetcpp_sha }}
           token: ${{ secrets.CI_FAMILY_READ_TOKEN }}
-          path: source/CXETCPP
+          path: source/family-ci-v3/CXETCPP
           submodules: false
           clean: false
           persist-credentials: false
       - name: Restore pinned source graph without shallow history
-        working-directory: source/CXETCPP
+        working-directory: source/family-ci-v3/CXETCPP
         env:
           GIT_CONFIG_COUNT: 2
           GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.CI_FAMILY_READ_TOKEN }}@github.com/.insteadOf'
@@ -137,25 +137,24 @@ jobs:
             exit 1
           }
       - name: Overlay exact hft-compressor snapshot
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: ./source/family-ci-v3/CXETCPP/.github/actions/overlay-family-revision
         with:
+          source-root: source/family-ci-v3/CXETCPP
+          repository-path: apps/hft-compressor
           repository: be0hhh/hft-compressor
-          ref: ${{ fromJSON(needs.snapshot.outputs.snapshot_json).hft_compressor }}
+          revision: ${{ fromJSON(needs.snapshot.outputs.snapshot_json).hft_compressor }}
           token: ${{ secrets.CI_FAMILY_READ_TOKEN }}
-          path: source/CXETCPP/apps/hft-compressor
-          clean: false
-          persist-credentials: false
       - name: Set up pinned LLVM
-        uses: ./source/CXETCPP/.github/actions/setup-toolchain
+        uses: ./source/family-ci-v3/CXETCPP/.github/actions/setup-toolchain
         with:
-          source-root: source/CXETCPP
+          source-root: source/family-ci-v3/CXETCPP
           local-cache-root: /home/gha-runner/github-actions/cache/toolchains/wsl-ci-cxetcpp
       - name: Configure persistent portable tree
-        working-directory: source/CXETCPP
+        working-directory: source/family-ci-v3/CXETCPP
         run: |
-          python3 "$GITHUB_WORKSPACE/source/CXETCPP/tools/Ci/FamilyCiWorkspace.py" source --root "$GITHUB_WORKSPACE/source/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON"
+          python3 "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP/tools/Ci/FamilyCiWorkspace.py" source --root "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON"
           /usr/bin/cmake --preset clang-ci-family-incremental -DHFT_COMPRESSOR_BUILD_CLI=ON -DHFT_COMPRESSOR_BUILD_TESTS=ON
-          python3 "$GITHUB_WORKSPACE/source/CXETCPP/tools/Ci/FamilyCiWorkspace.py" record --root "$GITHUB_WORKSPACE/source/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON" --build-dir "$GITHUB_WORKSPACE/source/CXETCPP/build/modes/clang-ci-family-incremental"
+          python3 "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP/tools/Ci/FamilyCiWorkspace.py" record --root "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON" --build-dir "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP/build/modes/clang-ci-family-incremental"
 
   production-build:
     name: production-build
@@ -168,9 +167,9 @@ jobs:
       FAMILY_SNAPSHOT_JSON: ${{ needs.snapshot.outputs.snapshot_json }}
     steps:
       - name: Build production CLI and core
-        working-directory: source/CXETCPP
+        working-directory: source/family-ci-v3/CXETCPP
         run: |
-          python3 "$GITHUB_WORKSPACE/source/CXETCPP/tools/Ci/FamilyCiWorkspace.py" verify --root "$GITHUB_WORKSPACE/source/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON" --build-dir "$GITHUB_WORKSPACE/source/CXETCPP/build/modes/clang-ci-family-incremental"
+          python3 "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP/tools/Ci/FamilyCiWorkspace.py" verify --root "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON" --build-dir "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP/build/modes/clang-ci-family-incremental"
           /usr/bin/cmake --build build/modes/clang-ci-family-incremental --target hft-compressor --parallel 4
 
   root-integration-build:
@@ -186,9 +185,9 @@ jobs:
       FAMILY_SNAPSHOT_JSON: ${{ needs.snapshot.outputs.snapshot_json }}
     steps:
       - name: Revalidate the root-toolchain library target
-        working-directory: source/CXETCPP
+        working-directory: source/family-ci-v3/CXETCPP
         run: |
-          python3 "$GITHUB_WORKSPACE/source/CXETCPP/tools/Ci/FamilyCiWorkspace.py" verify --root "$GITHUB_WORKSPACE/source/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON" --build-dir "$GITHUB_WORKSPACE/source/CXETCPP/build/modes/clang-ci-family-incremental"
+          python3 "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP/tools/Ci/FamilyCiWorkspace.py" verify --root "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON" --build-dir "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP/build/modes/clang-ci-family-incremental"
           /usr/bin/cmake --build build/modes/clang-ci-family-incremental --target hft_compressor_core --parallel 4
 
   test-build:
@@ -201,9 +200,9 @@ jobs:
       FAMILY_SNAPSHOT_JSON: ${{ needs.snapshot.outputs.snapshot_json }}
     steps:
       - name: Build offline tests
-        working-directory: source/CXETCPP
+        working-directory: source/family-ci-v3/CXETCPP
         run: |
-          python3 "$GITHUB_WORKSPACE/source/CXETCPP/tools/Ci/FamilyCiWorkspace.py" verify --root "$GITHUB_WORKSPACE/source/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON" --build-dir "$GITHUB_WORKSPACE/source/CXETCPP/build/modes/clang-ci-family-incremental"
+          python3 "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP/tools/Ci/FamilyCiWorkspace.py" verify --root "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON" --build-dir "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP/build/modes/clang-ci-family-incremental"
           /usr/bin/cmake --build build/modes/clang-ci-family-incremental --target hft-compressor-tests --parallel 4
 
   codec-tests:
@@ -216,9 +215,9 @@ jobs:
       FAMILY_SNAPSHOT_JSON: ${{ needs.snapshot.outputs.snapshot_json }}
     steps:
       - name: Run the real hft-compressor CTest target
-        working-directory: source/CXETCPP
+        working-directory: source/family-ci-v3/CXETCPP
         run: |
-          python3 "$GITHUB_WORKSPACE/source/CXETCPP/tools/Ci/FamilyCiWorkspace.py" verify --root "$GITHUB_WORKSPACE/source/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON" --build-dir "$GITHUB_WORKSPACE/source/CXETCPP/build/modes/clang-ci-family-incremental"
+          python3 "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP/tools/Ci/FamilyCiWorkspace.py" verify --root "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP" --repository "$GITHUB_REPOSITORY" --snapshot-json "$FAMILY_SNAPSHOT_JSON" --build-dir "$GITHUB_WORKSPACE/source/family-ci-v3/CXETCPP/build/modes/clang-ci-family-incremental"
           /usr/bin/ctest --test-dir build/modes/clang-ci-family-incremental --output-on-failure --no-tests=error --timeout 180 -R '^hft-compressor-tests$'
 
   publish-buildable-own:
