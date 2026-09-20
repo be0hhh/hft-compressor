@@ -1,10 +1,17 @@
 #include <cassert>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 #include "hft_compressor/CApi.hpp"
@@ -16,6 +23,43 @@ namespace fs = std::filesystem;
 
 namespace {
 
+class TemporaryDirectory {
+public:
+    explicit TemporaryDirectory(std::string_view prefix) {
+        static std::atomic_uint64_t sequence{0};
+        const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto ordinal = sequence.fetch_add(1, std::memory_order_relaxed);
+        const auto baseName = std::string{prefix} + '_' + std::to_string(timestamp) + '_' + std::to_string(ordinal);
+        const auto tempRoot = fs::temp_directory_path();
+
+        for (std::uint32_t attempt = 0; attempt < 1024u; ++attempt) {
+            auto candidate = tempRoot / (baseName + '_' + std::to_string(attempt));
+            std::error_code ec;
+            if (fs::create_directory(candidate, ec)) {
+                path_ = std::move(candidate);
+                return;
+            }
+            if (ec) {
+                throw fs::filesystem_error{"failed to create temporary test directory", candidate, ec};
+            }
+        }
+        throw std::runtime_error{"failed to allocate a unique temporary test directory"};
+    }
+
+    ~TemporaryDirectory() {
+        std::error_code ec;
+        fs::remove_all(path_, ec);
+    }
+
+    TemporaryDirectory(const TemporaryDirectory&) = delete;
+    TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
+
+    [[nodiscard]] const fs::path& path() const noexcept { return path_; }
+
+private:
+    fs::path path_;
+};
+
 void writeFile(const fs::path& path, const std::string& text) {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out << text;
@@ -24,6 +68,21 @@ void writeFile(const fs::path& path, const std::string& text) {
 void writeBytes(const fs::path& path, const std::vector<unsigned char>& bytes) {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+}
+
+void testTemporaryDirectoryOwnsFreshState() {
+    fs::path firstPath;
+    {
+        TemporaryDirectory first{"hft_compressor_tests"};
+        firstPath = first.path();
+        writeFile(firstPath / "stale.output", "stale");
+        assert(fs::exists(firstPath / "stale.output"));
+    }
+    assert(!fs::exists(firstPath));
+
+    TemporaryDirectory second{"hft_compressor_tests"};
+    assert(second.path() != firstPath);
+    assert(!fs::exists(second.path() / "stale.output"));
 }
 
 struct StandardCodecCase {
@@ -65,7 +124,14 @@ void runCustomJsonlCase(const CustomJsonlCase& testCase, const fs::path& dir) {
     request.pipelineId = testCase.pipelineId;
     const auto result = hft_compressor::compress(request);
     const bool byteExact = std::string_view{testCase.input} == std::string_view{testCase.decoded};
-    assert(result.status == (byteExact ? hft_compressor::Status::Ok : hft_compressor::Status::DecodeError));
+    const auto expectedStatus = byteExact ? hft_compressor::Status::Ok : hft_compressor::Status::DecodeError;
+    if (result.status != expectedStatus) {
+        std::cerr << "FAIL: custom_jsonl case=" << testCase.id
+                  << " expected_status=" << hft_compressor::statusToString(expectedStatus)
+                  << " actual_status=" << hft_compressor::statusToString(result.status)
+                  << " error=" << result.error << '\n';
+    }
+    assert(result.status == expectedStatus);
     assert(result.roundtripOk == byteExact);
 
     std::string decoded;
@@ -120,7 +186,7 @@ void runHftMacCase(const HftMacCase& codec, const fs::path& dir) {
     assert(result.transform == codec.transform);
     assert(result.entropy == codec.entropy);
     assert(result.roundtripOk);
-    assert(result.outputPath == request.outputRoot / codec.outputSlug / "sessions" / "hft_compressor_tests" / (std::string{codec.inputName}.substr(0, std::string{codec.inputName}.find('.')) + ".hfc"));
+    assert(result.outputPath == request.outputRoot / codec.outputSlug / "sessions" / dir.filename() / (std::string{codec.inputName}.substr(0, std::string{codec.inputName}.find('.')) + ".hfc"));
 
     hft_compressor::ReplayArtifactRequest artifactRequest{};
     artifactRequest.compressedRoot = request.outputRoot;
@@ -179,7 +245,7 @@ void runStandardCodecCase(const StandardCodecCase& codec, const fs::path& input,
 
     assert(hft_compressor::isOk(result.status));
     assert(result.pipelineId == codec.pipelineId);
-    assert(result.outputPath == request.outputRoot / codec.outputSlug / "sessions" / "hft_compressor_tests" / "trades.hfc");
+    assert(result.outputPath == request.outputRoot / codec.outputSlug / "sessions" / dir.filename() / "trades.hfc");
     assert(result.lineCount == 2u);
     assert(result.blockCount >= 1u);
     assert(result.roundtripOk);
@@ -236,6 +302,7 @@ int countCRecords(const hftc_record_batch_v1* batch, void* userData) {
 
 int main() {
     using hft_compressor::StreamType;
+    testTemporaryDirectoryOwnsFreshState();
     assert(hft_compressor::inferStreamTypeFromPath("trades.jsonl") == StreamType::Trades);
     assert(hft_compressor::inferStreamTypeFromPath("bookticker.jsonl") == StreamType::BookTicker);
     assert(hft_compressor::inferStreamTypeFromPath("depth.jsonl") == StreamType::Depth);
@@ -265,8 +332,8 @@ int main() {
     assert(hft_compressor::findPipeline("hftmac.depth_ladder_offset_rans_byte_static_v1") != nullptr);
     assert(hft_compressor::findPipeline("missing.pipeline") == nullptr);
 
-    const auto dir = fs::temp_directory_path() / "hft_compressor_tests";
-    fs::create_directories(dir);
+    TemporaryDirectory temporaryDirectory{"hft_compressor_tests"};
+    const auto& dir = temporaryDirectory.path();
     const auto input = dir / "trades.jsonl";
     writeFile(input, "[1,2,1,100]\n[2,3,0,200]\n");
 
@@ -473,7 +540,7 @@ int main() {
     assert(hft_compressor::isOk(rawResult.status));
     assert(rawResult.pipelineId == "std.raw_jsonl_blocks_v1");
     assert(rawResult.entropy == "none");
-    assert(rawResult.outputPath == dir / "compressedData" / "raw-jsonl" / "sessions" / "hft_compressor_tests" / "trades.hfr");
+    assert(rawResult.outputPath == dir / "compressedData" / "raw-jsonl" / "sessions" / dir.filename() / "trades.hfr");
     assert(rawResult.lineCount == 2u);
     assert(rawResult.blockCount >= 1u);
 
@@ -537,7 +604,7 @@ int main() {
     assert(result.lineCount == 2u);
     assert(result.blockCount >= 1u);
     assert(fs::exists(result.outputPath));
-    assert(result.outputPath == dir / "compressedData" / "zstd" / "sessions" / "hft_compressor_tests" / "trades.hfc");
+    assert(result.outputPath == dir / "compressedData" / "zstd" / "sessions" / dir.filename() / "trades.hfc");
     assert(fs::exists(result.metricsPath));
     std::ifstream in(result.outputPath, std::ios::binary);
     std::vector<unsigned char> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -761,7 +828,7 @@ int main() {
     depthRequest.pipelineId = "std.zstd_jsonl_blocks_v1";
     const auto depthResult = hft_compressor::compress(depthRequest);
     assert(hft_compressor::isOk(depthResult.status));
-    assert(depthResult.outputPath == dir / "compressedData" / "zstd" / "sessions" / "hft_compressor_tests" / "depth.hfc");
+    assert(depthResult.outputPath == dir / "compressedData" / "zstd" / "sessions" / dir.filename() / "depth.hfc");
 
     hft_compressor::ReplayArtifactRequest depthArtifactRequest{};
     depthArtifactRequest.compressedRoot = depthRequest.outputRoot;
@@ -809,8 +876,4 @@ int main() {
 #endif
     return 0;
 }
-
-
-
-
 
