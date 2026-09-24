@@ -29,7 +29,7 @@ env:
 
 jobs:
   snapshot:
-    name: snapshot
+    name: snapshot-contract
     runs-on: [self-hosted, linux, x64, wsl, local-control, hft-compressor]
     timeout-minutes: 10
     outputs:
@@ -221,7 +221,7 @@ jobs:
           /usr/bin/ctest --test-dir build/modes/clang-ci-family-incremental --output-on-failure --no-tests=error --timeout 180 -R '^hft-compressor-tests$'
 
   sanitizer-address-undefined:
-    name: sanitizer / address-undefined
+    name: sanitizer-address-undefined
     needs: [snapshot, root-integration-build]
     if: needs.root-integration-build.result == 'success'
     runs-on: [self-hosted, linux, x64, wsl, local-ci, hft-compressor]
