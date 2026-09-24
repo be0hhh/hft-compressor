@@ -193,6 +193,9 @@ jobs:
   test-build:
     name: test-build
     needs: [snapshot, root-integration-build]
+    if: >-
+      !cancelled() && needs.snapshot.result == 'success' &&
+      needs.root-integration-build.result == 'success'
     runs-on: [self-hosted, linux, x64, wsl, local-ci, hft-compressor]
     timeout-minutes: 90
     defaults: {run: {shell: "/home/gha-runner/github-actions/bin/gha-heavy-shell {0}"}}
@@ -208,6 +211,9 @@ jobs:
   codec-tests:
     name: tests / codec-and-container
     needs: [snapshot, test-build]
+    if: >-
+      !cancelled() && needs.snapshot.result == 'success' &&
+      needs.test-build.result == 'success'
     runs-on: [self-hosted, linux, x64, wsl, local-ci, hft-compressor]
     timeout-minutes: 30
     defaults: {run: {shell: "/home/gha-runner/github-actions/bin/gha-heavy-shell {0}"}}
@@ -223,7 +229,9 @@ jobs:
   sanitizer-address-undefined:
     name: sanitizer-address-undefined
     needs: [snapshot, root-integration-build]
-    if: needs.root-integration-build.result == 'success'
+    if: >-
+      !cancelled() && needs.snapshot.result == 'success' &&
+      needs.root-integration-build.result == 'success'
     runs-on: [self-hosted, linux, x64, wsl, local-ci, hft-compressor]
     timeout-minutes: 180
     defaults: {run: {shell: "/home/gha-runner/github-actions/bin/gha-heavy-shell {0}"}}
