@@ -1068,9 +1068,7 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const Pipe
     info.status = Status::Ok;
     info.found = true;
     info.path = path;
-    info.formatId = pipeline.id == std::string_view{"hftmac.trades_grouped_delta_qtydict_v1"}
-        ? "hftmac.trades_grouped_delta_qtydict.v1"
-        : "hftmac.trades_grouped_delta_qtydict.math.v3";
+    info.formatId = "hftmac.trades_grouped_delta_qtydict.math.v3";
     info.pipelineId = std::string{pipeline.id};
     info.transform = std::string{pipeline.transform};
     info.entropy = std::string{pipeline.entropy};
@@ -1172,7 +1170,7 @@ Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBloc
 
     std::ostringstream out;
     out << "{\n"
-        << "  \"pipeline_id\": \"hftmac.trades_grouped_delta_qtydict_v1\",\n"
+        << "  \"pipeline_id\": \"hftmac.trades_grouped_delta_qtydict_math_v3\",\n"
         << "  \"version\": " << header.version << ",\n"
         << "  \"record_count\": " << header.recordCount << ",\n"
         << "  \"chunk_count\": " << header.chunkCount << ",\n"

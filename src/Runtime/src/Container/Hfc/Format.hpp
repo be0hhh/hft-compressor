@@ -11,9 +11,7 @@ namespace hft_compressor::format {
 
 inline constexpr std::uint32_t kFileMagic = 0x31434648u;
 inline constexpr std::uint32_t kBlockMagic = 0x30424648u;
-inline constexpr std::uint16_t kVersion1 = 1;
-inline constexpr std::uint16_t kVersion2 = 2;
-inline constexpr std::uint16_t kVersion = kVersion2;
+inline constexpr std::uint16_t kVersion = 2;
 inline constexpr std::uint16_t kCodecZstdJsonlBlocks = 1;
 inline constexpr std::uint16_t kCodecLz4JsonlBlocks = 2;
 inline constexpr std::uint16_t kCodecBrotliJsonlBlocks = 3;
@@ -61,4 +59,3 @@ std::uint16_t streamToWire(StreamType type) noexcept;
 StreamType streamFromWire(std::uint16_t value) noexcept;
 
 }  // namespace hft_compressor::format
-

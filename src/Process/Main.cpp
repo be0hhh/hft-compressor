@@ -5,7 +5,6 @@
 
 #include "../Runtime/src/Codecs/BooktickerDeltaMask/BookTickerDeltaMask.hpp"
 #include "../Runtime/src/Codecs/DepthLadderOffset/DepthLadderOffset.hpp"
-#include "../Runtime/src/Codecs/DepthLadderOffset/LegacyDepthLadderOffset.hpp"
 #include "../Runtime/src/Codecs/EntropyHftmac/EntropyHftMac.hpp"
 #include "../Runtime/src/Codecs/TradesGroupedDeltaQtydict/TradesGroupedDeltaQtyDict.hpp"
 #include "hft_compressor/Compressor.hpp"
@@ -67,13 +66,6 @@ int main(int argc, char** argv) {
             if (view == "stats") return hft_compressor::codecs::bookticker_delta_mask::inspectStatsJsonFile(input, callback);
             return hft_compressor::Status::InvalidArgument;
         };
-        const auto tryLegacyDepth = [&]() noexcept {
-            if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::legacy_depth_ladder_offset::decodeFile(input, callback);
-            if (view == "encoded-json") return hft_compressor::codecs::legacy_depth_ladder_offset::inspectEncodedJsonFile(input, callback);
-            if (view == "encoded-binary") return hft_compressor::codecs::legacy_depth_ladder_offset::inspectEncodedBinaryFile(input, callback);
-            if (view == "stats") return hft_compressor::codecs::legacy_depth_ladder_offset::inspectStatsJsonFile(input, callback);
-            return hft_compressor::Status::InvalidArgument;
-        };
         const auto tryCurrentDepth = [&]() noexcept {
             if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::depth_ladder_offset::decodeFile(input, callback);
             if (view == "encoded-json") return hft_compressor::codecs::depth_ladder_offset::inspectEncodedJsonFile(input, callback);
@@ -81,15 +73,10 @@ int main(int argc, char** argv) {
             if (view == "stats") return hft_compressor::codecs::depth_ladder_offset::inspectStatsJsonFile(input, callback);
             return hft_compressor::Status::InvalidArgument;
         };
-        const auto tryDepth = [&]() noexcept {
-            auto st = tryLegacyDepth();
-            if (!hft_compressor::isOk(st)) st = tryCurrentDepth();
-            return st;
-        };
         status = tryEntropy();
         if (!hft_compressor::isOk(status)) status = tryTrade();
         if (!hft_compressor::isOk(status)) status = tryBookTicker();
-        if (!hft_compressor::isOk(status)) status = tryDepth();
+        if (!hft_compressor::isOk(status)) status = tryCurrentDepth();
         if (!hft_compressor::isOk(status)) {
             std::fprintf(stderr, "status=%s\n", hft_compressor::statusToString(status).data());
             return 1;

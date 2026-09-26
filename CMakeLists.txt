@@ -105,7 +105,6 @@ add_library(hft_compressor_core SHARED
     src/Runtime/src/Codecs/BooktickerDeltaMask/BookTickerDeltaMask.cpp
     src/Runtime/src/Codecs/BrotliJsonlBlocks/BrotliJsonlBlocks.cpp
     src/Runtime/src/Codecs/DepthLadderOffset/DepthLadderOffset.cpp
-    src/Runtime/src/Codecs/DepthLadderOffset/LegacyDepthLadderOffset.cpp
     src/Runtime/src/Codecs/EntropyHftmac/EntropyHftMac.cpp
     src/Runtime/src/Codecs/GzipJsonlBlocks/GzipJsonlBlocks.cpp
     src/Runtime/src/Codecs/Lz4JsonlBlocks/Lz4JsonlBlocks.cpp

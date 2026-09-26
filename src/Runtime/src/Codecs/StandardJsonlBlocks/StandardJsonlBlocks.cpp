@@ -22,7 +22,7 @@ bool codecAvailable(const CodecSpec& spec) noexcept {
 
 bool validHeader(const format::FileHeader& fileHeader, const CodecSpec& spec) noexcept {
     return fileHeader.magic == format::kFileMagic
-        && fileHeader.version == format::kVersion2
+        && fileHeader.version == format::kVersion
         && fileHeader.codec == spec.codec
         && fileHeader.blockBytes != 0u
         && format::streamFromWire(fileHeader.stream) != StreamType::Unknown;
@@ -237,7 +237,7 @@ CompressionResult compress(const CompressionRequest& request,
     }
 
     format::FileHeader fileHeader{};
-    fileHeader.version = format::kVersion2;
+    fileHeader.version = format::kVersion;
     fileHeader.codec = spec.codec;
     fileHeader.stream = format::streamToWire(streamType);
     fileHeader.blockBytes = blockBytes;
@@ -480,5 +480,4 @@ Status decodeFile(const std::filesystem::path& path,
 }
 
 }  // namespace hft_compressor::codecs::standard_jsonl_blocks
-
 

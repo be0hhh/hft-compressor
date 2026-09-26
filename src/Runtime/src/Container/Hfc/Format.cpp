@@ -94,7 +94,7 @@ bool parseBlockHeader(const std::uint8_t* data, std::size_t len, BlockHeader& ou
 }
 
 bool isSupportedVersion(std::uint16_t version) noexcept {
-    return version == kVersion1 || version == kVersion2;
+    return version == kVersion;
 }
 
 std::uint32_t crc32c(std::span<const std::uint8_t> data) noexcept {

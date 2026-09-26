@@ -14,7 +14,6 @@
 #include "../../Runtime/src/Container/Hfc/Format.hpp"
 #include "../../Runtime/src/Codecs/BooktickerDeltaMask/BookTickerDeltaMask.hpp"
 #include "../../Runtime/src/Codecs/DepthLadderOffset/DepthLadderOffset.hpp"
-#include "../../Runtime/src/Codecs/DepthLadderOffset/LegacyDepthLadderOffset.hpp"
 #include "../../Runtime/src/Codecs/EntropyHftmac/EntropyHftMac.hpp"
 #include "../../Runtime/src/Codecs/TradesGroupedDeltaQtydict/TradesGroupedDeltaQtyDict.hpp"
 #include "hft_compressor/ReplayDecode.hpp"
@@ -360,8 +359,7 @@ HfcFileInfo openHfcFile(const std::filesystem::path& path) noexcept {
         || header.blockBytes == 0u) {
         return failOpen(path, Status::CorruptData, "invalid hfc header");
     }
-    if (header.version >= format::kVersion2
-        && format::storedHeaderCrc32c(header) != format::headerCrc32c(header)) {
+    if (format::storedHeaderCrc32c(header) != format::headerCrc32c(header)) {
         return failOpen(path, Status::CorruptData, "hfc header crc mismatch");
     }
 
@@ -403,7 +401,7 @@ HfcFileInfo openHfcFile(const std::filesystem::path& path) noexcept {
         if (in.gcount() != static_cast<std::streamsize>(compressed.size())) {
             return failOpen(path, Status::CorruptData, "truncated hfc payload");
         }
-        if (header.version >= format::kVersion2 && format::crc32c(compressed) != format::compressedCrc32c(block)) {
+        if (format::crc32c(compressed) != format::compressedCrc32c(block)) {
             return failOpen(path, Status::CorruptData, "hfc compressed crc mismatch");
         }
 
@@ -413,8 +411,8 @@ HfcFileInfo openHfcFile(const std::filesystem::path& path) noexcept {
             block.compressedBytes,
             block.lineCount,
             block.firstByteOffset,
-            header.version >= format::kVersion2 ? format::compressedCrc32c(block) : 0u,
-            header.version >= format::kVersion2 ? format::uncompressedCrc32c(block) : 0u,
+            format::compressedCrc32c(block),
+            format::uncompressedCrc32c(block),
         });
 
         fileOffset += format::kBlockHeaderBytes + block.compressedBytes;
@@ -497,7 +495,7 @@ Status inspectCompressedArtifact(const std::filesystem::path& path,
         if (view == "encoded-binary") return codecs::entropy_hftmac::inspectEncodedBinaryFile(path, onBlock);
         if (view == "stats") return codecs::entropy_hftmac::inspectStatsJsonFile(path, onBlock);
     }
-    if (pipelineId == "hftmac.trades_grouped_delta_qtydict_math_v3" || pipelineId == "hftmac.trades_grouped_delta_qtydict_v1") {
+    if (pipelineId == "hftmac.trades_grouped_delta_qtydict_math_v3") {
         if (view == "canonical-json" || view == "canonical-jsonl") {
             return codecs::trades_grouped_delta_qtydict::decodeFile(path, onBlock);
         }
@@ -511,19 +509,13 @@ Status inspectCompressedArtifact(const std::filesystem::path& path,
             return codecs::trades_grouped_delta_qtydict::inspectStatsJsonFile(path, onBlock);
         }
     }
-    if (pipelineId == "hftmac.bookticker_delta_mask_v1" || pipelineId == "hftmac.bookticker_delta_mask_v2") {
+    if (pipelineId == "hftmac.bookticker_delta_mask_v2") {
         if (view == "canonical-json" || view == "canonical-jsonl") return codecs::bookticker_delta_mask::decodeFile(path, onBlock);
         if (view == "encoded-json") return codecs::bookticker_delta_mask::inspectEncodedJsonFile(path, onBlock);
         if (view == "encoded-binary") return codecs::bookticker_delta_mask::inspectEncodedBinaryFile(path, onBlock);
         if (view == "stats") return codecs::bookticker_delta_mask::inspectStatsJsonFile(path, onBlock);
     }
-    if (pipelineId == "hftmac.depth_ladder_offset_v1") {
-        if (view == "canonical-json" || view == "canonical-jsonl") return codecs::legacy_depth_ladder_offset::decodeFile(path, onBlock);
-        if (view == "encoded-json") return codecs::legacy_depth_ladder_offset::inspectEncodedJsonFile(path, onBlock);
-        if (view == "encoded-binary") return codecs::legacy_depth_ladder_offset::inspectEncodedBinaryFile(path, onBlock);
-        if (view == "stats") return codecs::legacy_depth_ladder_offset::inspectStatsJsonFile(path, onBlock);
-    }
-    if (pipelineId == "hftmac.depth_ladder_offset_v2" || pipelineId == "hftmac.depth_ladder_offset_v3") {
+    if (pipelineId == "hftmac.depth_ladder_offset_v3") {
         if (view == "canonical-json" || view == "canonical-jsonl") return codecs::depth_ladder_offset::decodeFile(path, onBlock);
         if (view == "encoded-json") return codecs::depth_ladder_offset::inspectEncodedJsonFile(path, onBlock);
         if (view == "encoded-binary") return codecs::depth_ladder_offset::inspectEncodedBinaryFile(path, onBlock);
@@ -843,8 +835,6 @@ DecodeVerifyResult decodeAndVerify(const DecodeVerifyRequest& request) noexcept 
 }
 
 }  // namespace hft_compressor
-
-
 
 
 

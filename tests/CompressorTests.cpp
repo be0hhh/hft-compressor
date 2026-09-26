@@ -469,6 +469,26 @@ int main() {
     const auto bookMathArtifact = hft_compressor::discoverReplayArtifact(bookMathArtifactRequest);
     assert(hft_compressor::isOk(bookMathArtifact.status));
     assert(bookMathArtifact.formatId == "hftmac.bookticker_delta_mask.v2");
+    const auto rejectOldArtifactVersion = [&](const fs::path& currentPath,
+                                               const char* pipelineId,
+                                               std::uint8_t oldVersion,
+                                               const char* outputName) {
+        std::ifstream in(currentPath, std::ios::binary);
+        std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(in)),
+                                         std::istreambuf_iterator<char>());
+        assert(bytes.size() > 6u);
+        bytes[4] = oldVersion;
+        bytes[5] = 0u;
+        const auto oldPath = dir / outputName;
+        writeBytes(oldPath, bytes);
+        assert(hft_compressor::inspectCompressedArtifact(
+                   oldPath, pipelineId, "canonical-jsonl",
+                   [](std::span<const std::uint8_t>) { return true; }) ==
+               hft_compressor::Status::CorruptData);
+    };
+    rejectOldArtifactVersion(bookMathResult.outputPath,
+                             "hftmac.bookticker_delta_mask_v2", 1u,
+                             "old_bookticker.artifact");
 
 
     const auto depthMathInput = dir / "depth.jsonl";
@@ -488,6 +508,9 @@ int main() {
     const auto depthMathArtifact = hft_compressor::discoverReplayArtifact(depthMathArtifactRequest);
     assert(hft_compressor::isOk(depthMathArtifact.status));
     assert(depthMathArtifact.formatId == "hftmac.depth_ladder_offset.v3");
+    rejectOldArtifactVersion(depthMathResult.outputPath,
+                             "hftmac.depth_ladder_offset_v3", 2u,
+                             "old_depth.artifact");
     const auto runEntropyCase = [&](const fs::path& path, const char* pipelineId, hft_compressor::StreamType streamType, const char* expected) {
         hft_compressor::CompressionRequest request{};
         request.inputPath = path;
@@ -624,17 +647,15 @@ int main() {
     assert(hft_compressor::isOk(fileStatus));
     assert(decodedFromFile == decoded);
 
-    auto v1Compatible = data;
-    v1Compatible[4] = 1u;
-    v1Compatible[5] = 0u;
-    const auto v1CompatiblePath = dir / "v1_compatible.hfc";
-    writeBytes(v1CompatiblePath, v1Compatible);
-    std::string legacyDecoded;
-    assert(hft_compressor::isOk(hft_compressor::decodeHfcFile(v1CompatiblePath, [&legacyDecoded](std::span<const std::uint8_t> block) {
-        legacyDecoded.append(reinterpret_cast<const char*>(block.data()), block.size());
+    auto oldVersion = data;
+    oldVersion[4] = 1u;
+    oldVersion[5] = 0u;
+    const auto oldVersionPath = dir / "old_version.hfc";
+    writeBytes(oldVersionPath, oldVersion);
+    assert(hft_compressor::decodeHfcFile(oldVersionPath, [](std::span<const std::uint8_t>) {
         return true;
-    })));
-    assert(legacyDecoded == decoded);
+    }) == hft_compressor::Status::CorruptData);
+    assert(hft_compressor::openHfcFile(oldVersionPath).status == hft_compressor::Status::CorruptData);
 
     const auto hfcInfo = hft_compressor::openHfcFile(result.outputPath);
     assert(hft_compressor::isOk(hfcInfo.status));
@@ -876,4 +897,3 @@ int main() {
 #endif
     return 0;
 }
-

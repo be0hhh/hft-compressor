@@ -39,25 +39,20 @@ bool validBlock(const format::BlockHeader& block,
 }
 
 #if HFT_COMPRESSOR_WITH_ZSTD
-Status decodeBlockPayload(const format::FileHeader& fileHeader,
-                          const format::BlockHeader& block,
+Status decodeBlockPayload(const format::BlockHeader& block,
                           std::span<const std::uint8_t> compressed,
                           std::vector<std::uint8_t>& decoded,
                           const DecodedBlockCallback& onBlock,
                           bool& shouldContinue) noexcept {
-    if (fileHeader.version >= format::kVersion2) {
-        const auto compressedCrc = format::crc32c(compressed);
-        if (compressedCrc != format::compressedCrc32c(block)) return Status::CorruptData;
-    }
+    const auto compressedCrc = format::crc32c(compressed);
+    if (compressedCrc != format::compressedCrc32c(block)) return Status::CorruptData;
 
     decoded.resize(block.uncompressedBytes);
     const auto written = ZSTD_decompress(decoded.data(), decoded.size(), compressed.data(), compressed.size());
     if (ZSTD_isError(written) || written != block.uncompressedBytes) return Status::DecodeError;
 
-    if (fileHeader.version >= format::kVersion2) {
-        const auto uncompressedCrc = format::crc32c(decoded);
-        if (uncompressedCrc != format::uncompressedCrc32c(block)) return Status::CorruptData;
-    }
+    const auto uncompressedCrc = format::crc32c(decoded);
+    if (uncompressedCrc != format::uncompressedCrc32c(block)) return Status::CorruptData;
 
     shouldContinue = onBlock(decoded);
     return Status::Ok;
@@ -65,8 +60,7 @@ Status decodeBlockPayload(const format::FileHeader& fileHeader,
 #endif
 
 bool validHeaderCrc(const format::FileHeader& fileHeader) noexcept {
-    return fileHeader.version < format::kVersion2
-        || format::storedHeaderCrc32c(fileHeader) == format::headerCrc32c(fileHeader);
+    return format::storedHeaderCrc32c(fileHeader) == format::headerCrc32c(fileHeader);
 }
 
 struct JsonCursor {
@@ -233,7 +227,7 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     }
 
     format::FileHeader fileHeader{};
-    fileHeader.version = format::kVersion2;
+    fileHeader.version = format::kVersion;
     fileHeader.stream = format::streamToWire(streamType);
     fileHeader.blockBytes = blockBytes;
     fileHeader.inputBytes = result.inputBytes;
@@ -364,8 +358,7 @@ Status decode(std::span<const std::uint8_t> compressedFile, const DecodedBlockCa
         offset += format::kBlockHeaderBytes;
         if (compressedFile.size() - offset < block.compressedBytes) return Status::CorruptData;
         bool shouldContinue = true;
-        const auto status = decodeBlockPayload(fileHeader,
-                                               block,
+        const auto status = decodeBlockPayload(block,
                                                {compressedFile.data() + offset, block.compressedBytes},
                                                decoded,
                                                onBlock,
@@ -420,7 +413,7 @@ Status decodeFile(const std::filesystem::path& path, const DecodedBlockCallback&
         totalRead += block.compressedBytes;
 
         bool shouldContinue = true;
-        const auto status = decodeBlockPayload(fileHeader, block, compressed, decoded, onBlock, shouldContinue);
+        const auto status = decodeBlockPayload(block, compressed, decoded, onBlock, shouldContinue);
         if (!isOk(status)) return status;
         expectedOffset += block.uncompressedBytes;
         if (!shouldContinue) return Status::Ok;
