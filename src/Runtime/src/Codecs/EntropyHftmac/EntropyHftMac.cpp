@@ -18,7 +18,6 @@
 #include "../../Common/CompressionInternals.hpp"
 #include "../../Common/Timing.hpp"
 #include "../../Container/Hfc/Format.hpp"
-#include "hft_compressor/Metrics.hpp"
 
 namespace hft_compressor::codecs::entropy_hftmac {
 namespace {
@@ -418,7 +417,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     const StreamType streamType = inferStreamTypeFromPath(request.inputPath);
     if (streamType == StreamType::Unknown) {
         auto result = internal::fail(Status::UnsupportedStream, request, &pipeline, "expected trades.jsonl, bookticker.jsonl, or depth.jsonl");
-        metrics::recordRun(result);
         return result;
     }
 
@@ -427,7 +425,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     const auto* basePipeline = findPipeline(basePipelineId(base));
     if (basePipeline == nullptr) {
         auto result = internal::fail(Status::UnsupportedPipeline, request, &pipeline, "base HFT-MAC pipeline is missing");
-        metrics::recordRun(result);
         return result;
     }
 
@@ -435,7 +432,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     std::filesystem::create_directories(outputPath.parent_path(), ec);
     if (ec) {
         auto result = internal::fail(Status::IoError, request, &pipeline, "failed to create output directory");
-        metrics::recordRun(result);
         return result;
     }
 
@@ -445,14 +441,12 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     const auto baseResult = hft_compressor::compress(baseRequest);
     if (!isOk(baseResult.status) || !baseResult.roundtripOk) {
         auto result = internal::fail(baseResult.status, request, &pipeline, baseResult.error.empty() ? "base HFT-MAC compression failed" : baseResult.error);
-        metrics::recordRun(result);
         return result;
     }
 
     std::vector<std::uint8_t> baseBytes;
     if (!internal::readFileBytes(baseResult.outputPath, baseBytes)) {
         auto result = internal::fail(Status::IoError, request, &pipeline, "failed to read base artifact");
-        metrics::recordRun(result);
         return result;
     }
 
@@ -492,7 +486,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     std::ofstream out(outputPath, std::ios::binary | std::ios::trunc);
     if (!out) {
         auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to open entropy artifact");
-        metrics::recordRun(failed);
         return failed;
     }
     out.write(reinterpret_cast<const char*>(headerBytes.data()), static_cast<std::streamsize>(headerBytes.size()));
@@ -501,7 +494,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     result.writeNs = timing::nowNs() - writeStartNs;
     if (!out) {
         auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to write entropy artifact");
-        metrics::recordRun(failed);
         return failed;
     }
     result.outputBytes = header.outputBytes;
@@ -531,7 +523,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     std::filesystem::remove(baseResult.outputPath, ec);
     std::filesystem::remove(baseResult.metricsPath, ec);
     (void)internal::writeTextFile(result.metricsPath, toMetricsJson(result));
-    metrics::recordRun(result);
     return result;
 }
 

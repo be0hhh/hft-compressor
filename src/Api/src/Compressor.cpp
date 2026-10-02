@@ -4,7 +4,6 @@
 #include <string_view>
 
 #include "../../Runtime/src/Common/CompressionInternals.hpp"
-#include "hft_compressor/Metrics.hpp"
 #include "../../Runtime/src/Pipelines/PipelineBackend.hpp"
 
 namespace hft_compressor {
@@ -19,17 +18,14 @@ CompressionResult compress(const CompressionRequest& request) noexcept {
     const auto* pipeline = findPipeline(request.pipelineId);
     if (pipeline == nullptr) {
         auto result = internal::fail(Status::UnsupportedPipeline, request, nullptr, "unknown pipeline id");
-        metrics::recordRun(result);
         return result;
     }
     if (pipeline->availability == PipelineAvailability::DependencyUnavailable) {
         auto result = internal::fail(Status::DependencyUnavailable, request, pipeline, std::string{pipeline->availabilityReason});
-        metrics::recordRun(result);
         return result;
     }
     if (pipeline->availability == PipelineAvailability::NotImplemented) {
         auto result = internal::fail(Status::NotImplemented, request, pipeline, std::string{pipeline->availabilityReason});
-        metrics::recordRun(result);
         return result;
     }
     if (const auto* backend = pipelines::findBackend(pipeline->id); backend != nullptr && backend->compress != nullptr) {
@@ -37,7 +33,6 @@ CompressionResult compress(const CompressionRequest& request) noexcept {
     }
 
     auto result = internal::fail(Status::UnsupportedPipeline, request, pipeline, "pipeline has no compressor implementation");
-    metrics::recordRun(result);
     return result;
 }
 

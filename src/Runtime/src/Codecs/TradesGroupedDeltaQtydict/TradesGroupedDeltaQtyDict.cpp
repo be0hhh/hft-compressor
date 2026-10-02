@@ -15,7 +15,6 @@
 #include "../../Common/CompressionInternals.hpp"
 #include "../../Common/Timing.hpp"
 #include "../../Container/Hfc/Format.hpp"
-#include "hft_compressor/Metrics.hpp"
 
 namespace hft_compressor::codecs::trades_grouped_delta_qtydict {
 namespace {
@@ -939,12 +938,10 @@ Status writeStringBlock(const std::string& text, const DecodedBlockCallback& onB
 CompressionResult compress(const CompressionRequest& request, const PipelineDescriptor& pipeline) noexcept {
     if (request.inputPath.empty()) {
         auto result = internal::fail(Status::InvalidArgument, request, &pipeline, "input path is empty");
-        metrics::recordRun(result);
         return result;
     }
     if (inferStreamTypeFromPath(request.inputPath) != StreamType::Trades) {
         auto result = internal::fail(Status::UnsupportedStream, request, &pipeline, "expected trades.jsonl");
-        metrics::recordRun(result);
         return result;
     }
     CompressionResult result{};
@@ -956,7 +953,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     std::vector<std::uint8_t> input;
     if (!internal::readFileBytes(request.inputPath, input)) {
         auto result = internal::fail(Status::IoError, request, &pipeline, "failed to read input file");
-        metrics::recordRun(result);
         return result;
     }
     result.readNs = timing::nowNs() - readStartNs;
@@ -966,7 +962,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     trades.reserve(static_cast<std::size_t>(std::count(input.begin(), input.end(), static_cast<std::uint8_t>('\n'))) + 1u);
     if (!parseTrades(input, trades)) {
         auto result = internal::fail(Status::CorruptData, request, &pipeline, "input is not clean canonical trades jsonl");
-        metrics::recordRun(result);
         return result;
     }
     result.parseNs = timing::nowNs() - parseStartNs;
@@ -976,7 +971,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     std::filesystem::create_directories(outputPath.parent_path(), ec);
     if (ec) {
         auto result = internal::fail(Status::IoError, request, &pipeline, "failed to create output directory");
-        metrics::recordRun(result);
         return result;
     }
 
@@ -986,7 +980,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     std::ofstream out(outputPath, std::ios::binary | std::ios::trunc);
     if (!out) {
         auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to open output file");
-        metrics::recordRun(failed);
         return failed;
     }
 
@@ -1028,7 +1021,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     result.encodeNs = timing::nowNs() - encodeTotalStartNs;
     if (!out) {
         auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to write trade grouped artifact");
-        metrics::recordRun(failed);
         return failed;
     }
 
@@ -1053,7 +1045,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     if (!result.roundtripOk) result.error = "roundtrip check failed";
 
     (void)internal::writeTextFile(result.metricsPath, toMetricsJson(result));
-    metrics::recordRun(result);
     return result;
 }
 

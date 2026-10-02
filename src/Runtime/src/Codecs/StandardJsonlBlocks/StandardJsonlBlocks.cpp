@@ -11,7 +11,6 @@
 #include "../../Common/CompressionInternals.hpp"
 #include "../../Common/Timing.hpp"
 #include "../../Container/Hfc/Format.hpp"
-#include "hft_compressor/Metrics.hpp"
 
 namespace hft_compressor::codecs::standard_jsonl_blocks {
 namespace {
@@ -185,29 +184,24 @@ CompressionResult compress(const CompressionRequest& request,
                            const CodecSpec& spec) noexcept {
     if (!codecAvailable(spec)) {
         auto result = internal::fail(Status::DependencyUnavailable, request, &pipeline, std::string{spec.dependencyError});
-        metrics::recordRun(result);
         return result;
     }
     if (request.inputPath.empty()) {
         auto result = internal::fail(Status::InvalidArgument, request, &pipeline, "input path is empty");
-        metrics::recordRun(result);
         return result;
     }
     const StreamType streamType = inferStreamTypeFromPath(request.inputPath);
     if (streamType == StreamType::Unknown) {
         auto result = internal::fail(Status::UnsupportedStream, request, &pipeline, "expected trades.jsonl, bookticker.jsonl, or depth.jsonl");
-        metrics::recordRun(result);
         return result;
     }
     std::vector<std::uint8_t> input;
     if (!internal::readFileBytes(request.inputPath, input)) {
         auto result = internal::fail(Status::IoError, request, &pipeline, "failed to read input file");
-        metrics::recordRun(result);
         return result;
     }
     if (!validateStrictJsonl(input, streamType)) {
         auto result = internal::fail(Status::CorruptData, request, &pipeline, "input is not strict canonical jsonl for stream");
-        metrics::recordRun(result);
         return result;
     }
 
@@ -217,7 +211,6 @@ CompressionResult compress(const CompressionRequest& request,
     std::filesystem::create_directories(outputPath.parent_path(), ec);
     if (ec) {
         auto result = internal::fail(Status::IoError, request, &pipeline, "failed to create output directory");
-        metrics::recordRun(result);
         return result;
     }
 
@@ -232,7 +225,6 @@ CompressionResult compress(const CompressionRequest& request,
     std::ofstream out(outputPath, std::ios::binary | std::ios::trunc);
     if (!out) {
         auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to open output file");
-        metrics::recordRun(failed);
         return failed;
     }
 
@@ -256,7 +248,6 @@ CompressionResult compress(const CompressionRequest& request,
         const auto encodeStatus = spec.compressPayload({input.data() + offset, plainSize}, request.zstdLevel, compressed, encodeError);
         if (!isOk(encodeStatus)) {
             auto failed = internal::fail(encodeStatus, request, &pipeline, encodeError.empty() ? "failed to compress block" : encodeError);
-            metrics::recordRun(failed);
             return failed;
         }
 
@@ -289,7 +280,6 @@ CompressionResult compress(const CompressionRequest& request,
     out.close();
     if (!out) {
         auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to write compressed file");
-        metrics::recordRun(failed);
         return failed;
     }
 
@@ -316,7 +306,6 @@ CompressionResult compress(const CompressionRequest& request,
     if (!result.roundtripOk) result.error = "roundtrip check failed";
 
     (void)internal::writeTextFile(result.metricsPath, toMetricsJson(result));
-    metrics::recordRun(result);
     return result;
 }
 

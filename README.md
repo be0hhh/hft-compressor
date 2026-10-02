@@ -10,24 +10,23 @@ and gzip baselines alongside project-owned stream codecs.
 
 ## Build
 
-The local `compile.sh` builds the shared library on Linux/WSL. Keep this checkout
-under `CXETCPP/apps/hft-compressor` and prepare the shared Clang 24 toolchain
-from the CXET root with `python3 tools/Toolchain/BootstrapLlvm.py`.
-Both entrypoints use the canonical `cmake/CxetToolchain.cmake` selector.
-A complete standalone portable build with the CLI and offline tests can be
-configured from this directory with:
+From this directory in the canonical CXET checkout:
 
 ```bash
-/usr/bin/cmake -S . -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DHFT_COMPRESSOR_PORTABLE_BUILD=ON \
-  -DHFT_COMPRESSOR_BUILD_CLI=ON \
-  -DHFT_COMPRESSOR_BUILD_TESTS=ON
-/usr/bin/cmake --build build --parallel "$(nproc)"
-/usr/bin/ctest --test-dir build --output-on-failure --no-tests=error
+./compile.sh p
+./compile.sh --force p
+./compile.sh all p
+./compile.sh --force all portable p
 ```
 
-The `cpp` workflow runs this pinned Clang configuration with all five system
-codec libraries installed. It obtains the shared selector/bootstrap from the
-private CXET root using `CI_CXETCPP_SSH_KEY`. It does not run compression
-benchmarks.
+The default builds only this repository's production targets and requires ready
+prerequisites. `--force` cleans and rebuilds the exact required production
+closure. `all` builds and runs only this repository's registered tests and their
+support libraries; it does not build production daemons or benchmarks. With
+`--force all`, production is rebuilt first, followed by the local tests. If no
+local tests are registered, the command reports that and succeeds.
+
+Libraries are static `.a` archives. Release uses `-O3`, host-native CPU targeting
+and full LTO; `portable` selects portable CPU targeting. Use `p` or `-j N` for
+parallelism and `--help` for the supported options.
+

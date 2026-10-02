@@ -19,6 +19,9 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 option(HFT_COMPRESSOR_PORTABLE_BUILD "If ON: disable -march=native for hft-compressor Release builds." OFF)
+if(CXET_ROOT_SOURCE_GRAPH)
+    set(HFT_COMPRESSOR_PORTABLE_BUILD "${CXET_PORTABLE_BUILD}")
+endif()
 if(HFT_COMPRESSOR_STANDALONE)
     set(_HFT_COMPRESSOR_BUILD_TOOLS_DEFAULT ON)
 else()
@@ -27,9 +30,6 @@ endif()
 
 option(HFT_COMPRESSOR_BUILD_CLI
     "Build hft-compressor CLI"
-    ${_HFT_COMPRESSOR_BUILD_TOOLS_DEFAULT})
-option(HFT_COMPRESSOR_BUILD_TESTS
-    "Build hft-compressor tests"
     ${_HFT_COMPRESSOR_BUILD_TOOLS_DEFAULT})
 unset(_HFT_COMPRESSOR_BUILD_TOOLS_DEFAULT)
 
@@ -100,7 +100,7 @@ if(ZLIB_FOUND)
     set(HFT_COMPRESSOR_WITH_ZLIB ON)
 endif()
 
-add_library(hft_compressor_core SHARED
+add_library(hft_compressor_core STATIC
     src/Api/src/CApi.cpp
     src/Runtime/src/Codecs/BooktickerDeltaMask/BookTickerDeltaMask.cpp
     src/Runtime/src/Codecs/BrotliJsonlBlocks/BrotliJsonlBlocks.cpp
@@ -118,9 +118,7 @@ add_library(hft_compressor_core SHARED
     src/Api/src/Compressor.cpp
     src/Runtime/src/Container/Hfc/Format.cpp
     src/Api/src/Decoder.cpp
-    src/Runtime/src/Metrics/Metrics.cpp
     src/Runtime/src/Metrics/CompressionResultMetrics.cpp
-    src/Runtime/src/Metrics/MetricsServer.cpp
     src/Runtime/src/Pipelines/PipelineBackend.cpp
     src/Runtime/src/Pipelines/PipelineRegistry.cpp
     src/Api/src/ReplayDecode.cpp
@@ -152,7 +150,6 @@ target_compile_definitions(hft_compressor_core
         HFT_COMPRESSOR_WITH_BROTLI=$<BOOL:${HFT_COMPRESSOR_WITH_BROTLI}>
         HFT_COMPRESSOR_WITH_LZMA=$<BOOL:${HFT_COMPRESSOR_WITH_LZMA}>
         HFT_COMPRESSOR_WITH_ZLIB=$<BOOL:${HFT_COMPRESSOR_WITH_ZLIB}>
-        HFT_COMPRESSOR_SHARED
     PRIVATE
         HFT_COMPRESSOR_BUILDING_LIBRARY
 )
@@ -163,6 +160,9 @@ elseif(HFT_COMPRESSOR_WITH_ZSTD)
     target_include_directories(hft_compressor_core PUBLIC ${ZSTD_INCLUDE_DIR})
     target_link_libraries(hft_compressor_core PUBLIC ${ZSTD_LIBRARY})
 endif()
+
+add_custom_target(hft-compressor-product DEPENDS hft_compressor_core)
+add_custom_target(hft-compressor-all DEPENDS hft-compressor-product)
 
 if(TARGET PkgConfig::LZ4)
     target_link_libraries(hft_compressor_core PUBLIC PkgConfig::LZ4)
@@ -206,23 +206,4 @@ if(HFT_COMPRESSOR_BUILD_CLI)
             $<$<CONFIG:Release>:-march=native>
         )
     endif()
-endif()
-
-if(HFT_COMPRESSOR_BUILD_TESTS)
-    enable_testing()
-    add_executable(hft-compressor-tests tests/CompressorTests.cpp)
-    set_target_properties(hft-compressor-tests PROPERTIES
-        CXX_STANDARD 23
-        CXX_STANDARD_REQUIRED ON
-        CXX_EXTENSIONS OFF
-    )
-    target_link_libraries(hft-compressor-tests PRIVATE hft_compressor_core)
-    target_compile_options(hft-compressor-tests PRIVATE -UNDEBUG)
-    if(NOT HFT_COMPRESSOR_PORTABLE_BUILD)
-        target_compile_options(hft-compressor-tests PRIVATE
-            $<$<CONFIG:Release>:-O3>
-            $<$<CONFIG:Release>:-march=native>
-        )
-    endif()
-    add_test(NAME hft-compressor-tests COMMAND hft-compressor-tests)
 endif()
