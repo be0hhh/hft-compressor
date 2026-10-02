@@ -28,7 +28,7 @@
 
 ## Build/test restraint
 
-- Do not run builds/tests/benchmarks unless the current user message explicitly asks for the exact verification.
+- Do not run builds/tests/benchmarks unless explicit active-task authorization covers the exact verification.
 - If verification is needed, state the exact command for the user to run manually.
 
 ## Subagents
