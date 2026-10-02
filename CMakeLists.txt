@@ -105,12 +105,19 @@ add_library(hft_compressor_core STATIC
     src/Runtime/src/Codecs/BooktickerDeltaMask/BookTickerDeltaMask.cpp
     src/Runtime/src/Codecs/BrotliJsonlBlocks/BrotliJsonlBlocks.cpp
     src/Runtime/src/Codecs/DepthLadderOffset/DepthLadderOffset.cpp
-    src/Runtime/src/Codecs/EntropyHftmac/EntropyHftMac.cpp
+    src/Runtime/src/Codecs/EntropyHftmac/Format.cpp
+    src/Runtime/src/Codecs/EntropyHftmac/Arithmetic.cpp
+    src/Runtime/src/Codecs/EntropyHftmac/Encoding.cpp
+    src/Runtime/src/Codecs/EntropyHftmac/Decoding.cpp
+    src/Runtime/src/Codecs/EntropyHftmac/Inspection.cpp
     src/Runtime/src/Codecs/GzipJsonlBlocks/GzipJsonlBlocks.cpp
     src/Runtime/src/Codecs/Lz4JsonlBlocks/Lz4JsonlBlocks.cpp
     src/Runtime/src/Codecs/RawJsonlBlocks/RawJsonlBlocks.cpp
     src/Runtime/src/Codecs/StandardJsonlBlocks/StandardJsonlBlocks.cpp
-    src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/TradesGroupedDeltaQtyDict.cpp
+    src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/Format.cpp
+    src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/Encoding.cpp
+    src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/Decoding.cpp
+    src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/Inspection.cpp
     src/Runtime/src/Codecs/XzJsonlBlocks/XzJsonlBlocks.cpp
     src/Runtime/src/Codecs/ZstdJsonlBlocks/ZstdJsonlBlocks.cpp
     src/Runtime/src/Common/CompressionInternals.cpp
@@ -118,6 +125,7 @@ add_library(hft_compressor_core STATIC
     src/Api/src/Compressor.cpp
     src/Runtime/src/Container/Hfc/Format.cpp
     src/Api/src/Decoder.cpp
+    src/Api/src/DecoderVerification.cpp
     src/Runtime/src/Metrics/CompressionResultMetrics.cpp
     src/Runtime/src/Pipelines/PipelineBackend.cpp
     src/Runtime/src/Pipelines/PipelineRegistry.cpp

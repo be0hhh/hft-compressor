@@ -34,3 +34,9 @@
 ## Subagents
 
 Use subagents only for disjoint areas: one codec, pipeline registry, container format, benchmark/reporting, or docs.
+
+## Development workflow
+
+Follow `../../docs/Agents/DevelopmentWorkflow.md` for behavioral TDD, refactor coverage and exact authorized
+offline checks. Implementation alone permits edits only; local RED/GREEN and
+CI, runtime and live evidence remain separate.
