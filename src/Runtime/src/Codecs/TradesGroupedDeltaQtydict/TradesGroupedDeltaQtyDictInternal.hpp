@@ -18,6 +18,8 @@
 
 #pragma once
 
+namespace hft_compressor::internal { class DecodeSource; }
+
 namespace hft_compressor::codecs::trades_grouped_delta_qtydict::codec_detail {
 
 
@@ -208,26 +210,17 @@ std::uint64_t qtyCode(const EncodedChunk& chunk, std::int64_t qty) noexcept;
 EncodedChunk encodeChunk(const std::vector<Trade>& trades, std::size_t begin, std::size_t end);
 void writeChunk(std::ofstream& out, const EncodedChunk& chunk);
 ReplayArtifactInfo failArtifact(const std::filesystem::path& path, Status status, std::string error);
-bool readFile(const std::filesystem::path& path, std::vector<std::uint8_t>& out) noexcept;
-Status decodeChunk(
-                   const ChunkHeader& header,
-                   std::span<const std::int64_t> hotQty,
-                   std::span<const std::uint8_t> timeStream,
-                   std::span<const std::uint8_t> priceStream,
-                   std::span<const std::uint8_t> sideStream,
-                   std::span<const std::uint8_t> dpZeroStream,
-                   std::span<const std::uint8_t> countOneStream,
-                   std::span<const std::uint8_t> priceGroupCountOneStream,
-                   std::span<const std::uint8_t> qtyCodeStream,
-                   std::span<const std::uint8_t> qtyEscapeStream,
-                   std::string_view lineEnding,
-                   std::string* jsonlOut,
-                   std::ostream* encodedJsonOut) noexcept;
+bool readFile(const std::filesystem::path& path, std::vector<std::uint8_t>& out);
+Status walkSource(const internal::DecodeSource& file,
+                  const DecodedBlockCallback* onJsonl,
+                  std::ostream* encodedJsonOut,
+                  std::ostream* binaryDumpOut,
+                  FileHeader* parsedHeader);
 Status walkFile(std::span<const std::uint8_t> file,
                 const DecodedBlockCallback* onJsonl,
                 std::ostream* encodedJsonOut,
                 std::ostream* binaryDumpOut,
                 FileHeader* parsedHeader = nullptr) noexcept;
-Status writeStringBlock(const std::string& text, const DecodedBlockCallback& onBlock) noexcept;
+Status writeStringBlock(const std::string& text, const DecodedBlockCallback& onBlock);
 
 }  // namespace codec_detail

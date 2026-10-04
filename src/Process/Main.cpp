@@ -11,8 +11,9 @@
 
 namespace {
 
-void printBlock(std::span<const std::uint8_t> block) {
-    if (!block.empty()) std::fwrite(block.data(), 1u, block.size(), stdout);
+bool printBlock(std::span<const std::uint8_t> block) noexcept {
+    return (block.empty() || std::fwrite(block.data(), 1u, block.size(), stdout) == block.size())
+        && std::ferror(stdout) == 0;
 }
 
 bool argEquals(char* arg, std::string_view value) noexcept {
@@ -42,8 +43,7 @@ int main(int argc, char** argv) {
         }
         hft_compressor::Status status = hft_compressor::Status::InvalidArgument;
         auto callback = [](std::span<const std::uint8_t> block) noexcept -> bool {
-            printBlock(block);
-            return true;
+            return printBlock(block);
         };
         const auto tryEntropy = [&]() noexcept {
             if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::entropy_hftmac::decodeFile(input, callback);
@@ -73,10 +73,23 @@ int main(int argc, char** argv) {
             if (view == "stats") return hft_compressor::codecs::depth_ladder_offset::inspectStatsJsonFile(input, callback);
             return hft_compressor::Status::InvalidArgument;
         };
-        status = tryEntropy();
-        if (!hft_compressor::isOk(status)) status = tryTrade();
-        if (!hft_compressor::isOk(status)) status = tryBookTicker();
-        if (!hft_compressor::isOk(status)) status = tryCurrentDepth();
+        // Probe metadata without output, then invoke one exact format decoder.
+        // A later error must not append another codec's output to a failed prefix.
+        const auto matches = [&](std::string_view pipelineId, auto inspect) {
+            const auto* pipeline = hft_compressor::findPipeline(pipelineId);
+            return pipeline && hft_compressor::isOk(inspect(input, *pipeline).status);
+        };
+        if (matches("hftmac.trades_grouped_delta_qtydict_ac16_ctx0_v1", hft_compressor::codecs::entropy_hftmac::inspectArtifact))
+            status = tryEntropy();
+        else if (matches("hftmac.trades_grouped_delta_qtydict_math_v3", hft_compressor::codecs::trades_grouped_delta_qtydict::inspectArtifact))
+            status = tryTrade();
+        else if (matches("hftmac.bookticker_delta_mask_v2", hft_compressor::codecs::bookticker_delta_mask::inspectArtifact))
+            status = tryBookTicker();
+        else if (matches("hftmac.depth_ladder_offset_v3", hft_compressor::codecs::depth_ladder_offset::inspectArtifact))
+            status = tryCurrentDepth();
+        else status = hft_compressor::Status::CorruptData;
+        if (hft_compressor::isOk(status) && std::fflush(stdout) != 0)
+            status = hft_compressor::Status::IoError;
         if (!hft_compressor::isOk(status)) {
             std::fprintf(stderr, "status=%s\n", hft_compressor::statusToString(status).data());
             return 1;
@@ -96,7 +109,7 @@ int main(int argc, char** argv) {
     const auto result = hft_compressor::compress(request);
     std::printf("status=%s\n", hft_compressor::statusToString(result.status).data());
     std::printf("pipeline=%s\n", result.pipelineId.c_str());
-    std::printf("output=%s\n", result.outputPath.string().c_str());
+    std::printf("output=%s\n", hft_compressor::isOk(result.status) ? result.outputPath.string().c_str() : "");
     std::printf("ratio=%.4f encode_mb_s=%.2f decode_mb_s=%.2f\n",
                 hft_compressor::ratio(result),
                 hft_compressor::encodeMbPerSec(result),

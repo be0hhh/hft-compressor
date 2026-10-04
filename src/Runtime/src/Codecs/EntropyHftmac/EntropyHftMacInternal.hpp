@@ -19,6 +19,7 @@
 #include "../TradesGroupedDeltaQtydict/TradesGroupedDeltaQtyDict.hpp"
 #include "../../Common/CompressionInternals.hpp"
 #include "../../Common/Timing.hpp"
+#include "../../Common/DecodeSource.hpp"
 #include "../../Container/Hfc/Format.hpp"
 
 
@@ -72,7 +73,7 @@ struct Header {
 
 std::vector<std::uint8_t> serializeHeader(Header header, bool includeCrc);
 
-std::uint32_t headerCrc32c(const Header& header);
+std::uint32_t headerCrc32c(const Header& header) noexcept;
 
 bool parseHeader(const std::uint8_t* data, std::size_t size, Header& out) noexcept;
 
@@ -85,10 +86,11 @@ bool validHeader(const Header& header) noexcept;
 // -log2(p(bit)).
 std::vector<std::uint8_t> arithmeticEncode(std::span<const std::uint8_t> input, EntropyKind kind);
 
-Status arithmeticDecode(std::span<const std::uint8_t> encoded,
-                        EntropyKind kind,
-                        std::uint64_t decodedBytes,
-                        std::vector<std::uint8_t>& out) noexcept;
+std::unique_ptr<internal::DecodeCursor> arithmeticCursor(const internal::DecodeSource& encoded,
+                                                       const Header& header);
+Status verifyPayload(const internal::DecodeSource& file, Header& header);
+Status readHeader(const internal::DecodeSource& file, Header& header);
+Status decodeSource(const internal::DecodeSource& file, const DecodedBlockCallback& onBlock);
 
 EntropyKind entropyKindFor(std::string_view id) noexcept;
 
@@ -100,10 +102,5 @@ std::string_view formatIdFor(BaseKind base, EntropyKind kind) noexcept;
 
 std::string_view entropyName(EntropyKind kind) noexcept;
 
-Status decodeBase(BaseKind base, std::span<const std::uint8_t> bytes, const DecodedBlockCallback& onBlock) noexcept;
-
-Status decodePayload(std::span<const std::uint8_t> file, Header& header, std::vector<std::uint8_t>& baseBytes) noexcept;
-
-Status readFile(const std::filesystem::path& path, std::vector<std::uint8_t>& out) noexcept;
 
 }  // namespace hft_compressor::codecs::entropy_hftmac::detail

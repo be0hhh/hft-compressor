@@ -97,6 +97,7 @@ std::vector<std::filesystem::path> replayArtifactCandidates(const ReplayArtifact
 }  // namespace
 
 HfcFileInfo openHfcFile(const std::filesystem::path& path) noexcept {
+    try {
     if (path.empty()) return failOpen(path, Status::InvalidArgument, "hfc path is empty");
     std::ifstream in(path, std::ios::binary);
     if (!in) return failOpen(path, Status::IoError, "failed to open hfc file");
@@ -184,9 +185,11 @@ HfcFileInfo openHfcFile(const std::filesystem::path& path) noexcept {
     char extra = 0;
     if (in.read(&extra, 1)) return failOpen(path, Status::CorruptData, "trailing bytes after hfc blocks");
     return info;
+    } catch (...) { HfcFileInfo failed{}; failed.status = Status::DecodeError; return failed; }
 }
 
 ReplayArtifactInfo discoverReplayArtifact(const ReplayArtifactRequest& request) noexcept {
+    try {
     if (request.streamType == StreamType::Unknown) {
         return failArtifact(Status::InvalidArgument, "replay artifact stream is unknown");
     }
@@ -216,6 +219,7 @@ ReplayArtifactInfo discoverReplayArtifact(const ReplayArtifactRequest& request) 
     }
 
     return missingArtifact();
+    } catch (...) { ReplayArtifactInfo failed{}; failed.status = Status::DecodeError; return failed; }
 }
 
 Status decodeReplayArtifactJsonl(const ReplayArtifactInfo& artifact,
@@ -282,10 +286,11 @@ Status inspectCompressedArtifact(const std::filesystem::path& path,
 
 Status decodeReplayRecords(const ReplayArtifactRequest& request,
                            const DecodedRecordCallback& onRecord) noexcept {
+    try {
     if (!onRecord) return Status::InvalidArgument;
     ReplayDecodeRequest decodeRequest{};
     decodeRequest.artifact = request;
-    return decodeReplayRecordBatches(decodeRequest, [&](const ReplayRecordBatch& batch) noexcept -> bool {
+    return decodeReplayRecordBatches(decodeRequest, [&](const ReplayRecordBatch& batch) -> bool {
         for (const auto& row : batch.trades) {
             ReplayRecord record{};
             record.kind = ReplayRecordKind::Trade;
@@ -318,6 +323,7 @@ Status decodeReplayRecords(const ReplayArtifactRequest& request,
         }
         return true;
     });
+    } catch (...) { return Status::DecodeError; }
 }
 
 

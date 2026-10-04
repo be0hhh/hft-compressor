@@ -83,7 +83,7 @@ bool parseDepthLevel(JsonCursor& p, ReplayDepthLevel& out) noexcept {
         && p.consume(']');
 }
 
-bool parseDepthLine(std::string_view line, ReplayRecordBatch& batch) noexcept {
+bool parseDepthLine(std::string_view line, ReplayRecordBatch& batch) {
     JsonCursor p{line};
     if (!p.consume('[') || !p.peek('[')) return false;
     ReplayBatchDepthRecord row{};
@@ -99,7 +99,7 @@ bool parseDepthLine(std::string_view line, ReplayRecordBatch& batch) noexcept {
     return true;
 }
 
-bool parseLine(StreamType streamType, std::string_view line, ReplayRecordBatch& batch) noexcept {
+bool parseLine(StreamType streamType, std::string_view line, ReplayRecordBatch& batch) {
     if (streamType == StreamType::Trades) {
         ReplayBatchTradeRecord row{};
         if (!parseTradeLine(line, row)) return false;
@@ -116,7 +116,7 @@ bool parseLine(StreamType streamType, std::string_view line, ReplayRecordBatch& 
     return false;
 }
 
-Status flushBatch(ReplayRecordBatch& batch, const ReplayRecordBatchCallback& onBatch) noexcept {
+Status flushBatch(ReplayRecordBatch& batch, const ReplayRecordBatchCallback& onBatch) {
     if (batch.recordCount() == 0u) return Status::Ok;
     if (!onBatch(batch)) return Status::CallbackStopped;
     batch.clearRows();
@@ -129,7 +129,7 @@ Status processJsonlBlock(StreamType streamType,
                          std::uint64_t& lineNumber,
                          ReplayRecordBatch& batch,
                          std::size_t maxRecordsPerBatch,
-                         const ReplayRecordBatchCallback& onBatch) noexcept {
+                         const ReplayRecordBatchCallback& onBatch) {
     carry.append(reinterpret_cast<const char*>(block.data()), block.size());
     std::size_t start = 0;
     for (;;) {
@@ -173,6 +173,7 @@ std::size_t ReplayRecordBatch::recordCount() const noexcept {
 Status decodeReplayArtifactRecordBatches(const ReplayArtifactInfo& artifact,
                                          std::size_t maxRecordsPerBatch,
                                          const ReplayRecordBatchCallback& onBatch) noexcept {
+    try {
     if (!artifact.found || artifact.streamType == StreamType::Unknown || !onBatch) return Status::InvalidArgument;
     maxRecordsPerBatch = std::max<std::size_t>(maxRecordsPerBatch, 1u);
     ReplayRecordBatch batch{};
@@ -180,7 +181,7 @@ Status decodeReplayArtifactRecordBatches(const ReplayArtifactInfo& artifact,
     std::string carry;
     std::uint64_t lineNumber = 0;
     Status streamStatus = Status::Ok;
-    const auto decodeStatus = decodeReplayArtifactJsonl(artifact, [&](std::span<const std::uint8_t> block) noexcept -> bool {
+    const auto decodeStatus = decodeReplayArtifactJsonl(artifact, [&](std::span<const std::uint8_t> block) -> bool {
         streamStatus = processJsonlBlock(artifact.streamType,
                                          block,
                                          carry,
@@ -190,6 +191,9 @@ Status decodeReplayArtifactRecordBatches(const ReplayArtifactInfo& artifact,
                                          onBatch);
         return isOk(streamStatus);
     });
+    // A file-integrity failure must not be hidden by the record consumer's
+    // deliberate stop during the publication pass.
+    if (!isOk(decodeStatus) && decodeStatus != Status::CallbackStopped) return decodeStatus;
     if (!isOk(streamStatus)) return streamStatus;
     if (!isOk(decodeStatus)) return decodeStatus;
     if (!carry.empty()) {
@@ -203,15 +207,18 @@ Status decodeReplayArtifactRecordBatches(const ReplayArtifactInfo& artifact,
         }
     }
     return flushBatch(batch, onBatch);
+    } catch (...) { return Status::DecodeError; }
 }
 
 Status decodeReplayRecordBatches(const ReplayDecodeRequest& request,
                                  const ReplayRecordBatchCallback& onBatch) noexcept {
+    try {
     if (!onBatch) return Status::InvalidArgument;
     const auto artifact = discoverReplayArtifact(request.artifact);
     if (!isOk(artifact.status)) return artifact.status;
     if (!artifact.found) return Status::IoError;
     return decodeReplayArtifactRecordBatches(artifact, request.maxRecordsPerBatch, onBatch);
+    } catch (...) { return Status::DecodeError; }
 }
 
 }  // namespace hft_compressor

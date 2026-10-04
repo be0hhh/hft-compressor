@@ -269,6 +269,7 @@ std::string toVerifyMetricsJson(const DecodeVerifyResult& result) {
 }
 
 DecodeVerifyResult decodeAndVerify(const DecodeVerifyRequest& request) noexcept {
+    try {
     if (request.compressedPath.empty()) {
         return failVerify(Status::InvalidArgument, request, "compressed path is empty");
     }
@@ -536,6 +537,7 @@ DecodeVerifyResult decodeAndVerify(const DecodeVerifyRequest& request) noexcept 
 
     (void)internal::writeTextFile(result.metricsPath, toVerifyMetricsJson(result));
     return result;
+    } catch (...) { DecodeVerifyResult failed{}; failed.status = Status::DecodeError; return failed; }
 }
 
 

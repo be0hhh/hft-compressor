@@ -10,6 +10,9 @@
 #include <string_view>
 #include <system_error>
 #include <vector>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include "../BooktickerDeltaMask/BookTickerDeltaMask.hpp"
 #include "../DepthLadderOffset/DepthLadderOffset.hpp"
 #include "../TradesGroupedDeltaQtydict/TradesGroupedDeltaQtyDict.hpp"
@@ -20,7 +23,27 @@
 
 namespace hft_compressor::codecs::entropy_hftmac::detail {
 
-
+struct BaseArtifactCleanup final {
+    const CompressionResult& result;
+    int artifact{-1}, metrics{-1};
+    explicit BaseArtifactCleanup(const CompressionResult& value) noexcept
+        : result(value),
+          artifact(::open(value.outputPath.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)),
+          metrics(::open(value.metricsPath.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)) {}
+    ~BaseArtifactCleanup() noexcept {
+        const std::filesystem::path* paths[]{&result.outputPath, &result.metricsPath};
+        const int descriptors[]{artifact, metrics};
+        for (std::size_t i = 0; i < 2u; ++i) {
+            if (descriptors[i] < 0) continue;
+            struct stat opened{}, current{};
+            if (::fstat(descriptors[i], &opened) == 0 && opened.st_uid == ::geteuid()
+                && ::lstat(paths[i]->c_str(), &current) == 0 && S_ISREG(current.st_mode)
+                && opened.st_dev == current.st_dev && opened.st_ino == current.st_ino)
+                (void)::unlink(paths[i]->c_str());
+            (void)::close(descriptors[i]);
+        }
+    }
+};
 
 }
 
@@ -28,7 +51,7 @@ namespace hft_compressor::codecs::entropy_hftmac {
 
 using namespace detail;
 
-CompressionResult compress(const CompressionRequest& request, const PipelineDescriptor& pipeline) noexcept {
+CompressionResult compress(const CompressionRequest& request, const PipelineDescriptor& pipeline) noexcept try {
     const StreamType streamType = inferStreamTypeFromPath(request.inputPath);
     if (streamType == StreamType::Unknown) {
         auto result = internal::fail(Status::UnsupportedStream, request, &pipeline, "expected trades.jsonl, bookticker.jsonl, or depth.jsonl");
@@ -54,6 +77,7 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     baseRequest.pipelineId = std::string{basePipeline->id};
     baseRequest.outputPathOverride = outputPath.parent_path() / (outputPath.stem().string() + ".base.tmp");
     const auto baseResult = hft_compressor::compress(baseRequest);
+    BaseArtifactCleanup cleanup(baseResult);
     if (!isOk(baseResult.status) || !baseResult.roundtripOk) {
         auto result = internal::fail(baseResult.status, request, &pipeline, baseResult.error.empty() ? "base HFT-MAC compression failed" : baseResult.error);
         return result;
@@ -135,10 +159,8 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     result.status = result.roundtripOk ? Status::Ok : Status::DecodeError;
     if (!result.roundtripOk) result.error = "entropy roundtrip check failed";
 
-    std::filesystem::remove(baseResult.outputPath, ec);
-    std::filesystem::remove(baseResult.metricsPath, ec);
     (void)internal::writeTextFile(result.metricsPath, toMetricsJson(result));
     return result;
-}
+} catch (...) { CompressionResult failed{}; failed.status = Status::DecodeError; return failed; }
 
 }

@@ -1,4 +1,5 @@
 #include "DepthLadderOffset.hpp"
+#include "../BaseDecode.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -62,7 +63,7 @@ struct Cursor {
 
 bool validSide(std::int64_t side) noexcept { return side == 0 || side == 1; }
 
-bool parseLine(std::string_view line, Batch& out) noexcept {
+bool parseLine(std::string_view line, Batch& out) {
     Cursor p{line};
     if (!p.ch('[') || !p.peek('[')) return false;
     while (p.peek('[')) {
@@ -98,22 +99,10 @@ bool parseBatches(std::span<const std::uint8_t> input, std::vector<Batch>& out) 
 std::int64_t gcdAbs(std::int64_t a, std::int64_t b) noexcept { a = a < 0 ? -a : a; b = b < 0 ? -b : b; return std::gcd(a, b); }
 std::int64_t safeScale(std::int64_t value) noexcept { return value == 0 ? 1 : (value < 0 ? -value : value); }
 std::uint64_t zigzag(std::int64_t value) noexcept { return value < 0 ? static_cast<std::uint64_t>(-value) * 2u - 1u : static_cast<std::uint64_t>(value) * 2u; }
-std::int64_t unzigzag(std::uint64_t value) noexcept { return (value & 1u) != 0u ? -static_cast<std::int64_t>((value + 1u) / 2u) : static_cast<std::int64_t>(value / 2u); }
 
 void writeVarint(std::vector<std::uint8_t>& out, std::uint64_t value) {
     while (value >= 0x80u) { out.push_back(static_cast<std::uint8_t>(value | 0x80u)); value >>= 7u; }
     out.push_back(static_cast<std::uint8_t>(value));
-}
-
-bool readVarint(const std::uint8_t*& p, const std::uint8_t* end, std::uint64_t& out) noexcept {
-    out = 0; unsigned shift = 0;
-    while (p < end && shift <= 63u) {
-        const auto byte = *p++;
-        out |= static_cast<std::uint64_t>(byte & 0x7fu) << shift;
-        if ((byte & 0x80u) == 0u) return true;
-        shift += 7u;
-    }
-    return false;
 }
 
 template <class T> void writeLe(std::vector<std::uint8_t>& out, T value) {
@@ -128,7 +117,6 @@ template <class T> bool readLe(const std::uint8_t*& p, const std::uint8_t* end, 
     out = static_cast<T>(raw); return true;
 }
 struct BitWriter { std::vector<std::uint8_t> bytes; std::uint8_t current{0}; unsigned used{0}; void bit(bool value) { if (value) current |= static_cast<std::uint8_t>(1u << used); if (++used == 8u) { bytes.push_back(current); current = 0; used = 0; } } std::vector<std::uint8_t> finish() { if (used != 0u) bytes.push_back(current); return bytes; } };
-struct BitReader { const std::uint8_t* p{}; const std::uint8_t* end{}; std::uint8_t current{0}; unsigned used{8}; bool bit(bool& out) noexcept { if (used == 8u) { if (p >= end) return false; current = *p++; used = 0; } out = ((current >> used) & 1u) != 0u; ++used; return true; } };
 
 struct BookState {
     std::unordered_map<std::int64_t, std::int64_t> bid, ask;
@@ -159,10 +147,10 @@ bool readHeader(std::span<const std::uint8_t> data, Header& h) noexcept {
         && readLe(p, end, h.hotQtyCount) && readLe(p, end, h.hotQtyBytes) && readLe(p, end, h.batchBytes) && readLe(p, end, h.sideBytes) && readLe(p, end, h.priceModeBytes) && readLe(p, end, h.deleteBytes)
         && readLe(p, end, h.priceBytes) && readLe(p, end, h.qtyCodeBytes) && readLe(p, end, h.qtyEscapeBytes)
         && readLe(p, end, h.deleteCount) && readLe(p, end, h.qtyEscapeCount) && readLe(p, end, h.runModeBatchCount) && readLe(p, end, h.fallbackBatchCount) && readLe(p, end, h.offsetPriceCount) && readLe(p, end, h.absolutePriceCount)
-        && h.magic == kMagic && h.version == kCurrentArtifactVersion && h.hotQtyCount <= kHotQtyCount * 2u && h.bidHotCount <= h.hotQtyCount && h.hotQtyBytes == h.hotQtyCount * sizeof(std::int64_t);
+        && h.magic == kMagic && h.version == kCurrentArtifactVersion && h.hotQtyCount <= kHotQtyCount * 2u && h.bidHotCount <= h.hotQtyCount && h.hotQtyBytes == h.hotQtyCount * sizeof(std::int64_t)
+        && std::all_of(p, end, [](auto byte) { return byte == 0u; });
 }
 
-bool take(std::span<const std::uint8_t> data, std::size_t& offset, std::uint32_t size, std::span<const std::uint8_t>& out) noexcept { if (offset + size > data.size()) return false; out = data.subspan(offset, size); offset += size; return true; }
 
 std::vector<std::int64_t> buildHotQty(const std::unordered_map<std::int64_t, std::uint32_t>& counts, std::int64_t qtyScale) {
     std::vector<std::pair<std::int64_t, std::uint32_t>> values(counts.begin(), counts.end());
@@ -179,12 +167,6 @@ void writeQty(std::int64_t side, std::int64_t qty, std::span<const std::int64_t>
     if (code == hot.size()) { writeVarint(escapeStream, static_cast<std::uint64_t>(qty)); ++h.qtyEscapeCount; }
 }
 
-bool readQty(std::int64_t side, std::span<const std::int64_t> bidHot, std::span<const std::int64_t> askHot, const std::uint8_t*& code, const std::uint8_t* codeEnd, const std::uint8_t*& escape, const std::uint8_t* escapeEnd, std::int64_t& qty) noexcept {
-    const auto hot = side == 0 ? bidHot : askHot; std::uint64_t rawCode = 0; if (!readVarint(code, codeEnd, rawCode)) return false;
-    if (rawCode < hot.size()) { qty = hot[static_cast<std::size_t>(rawCode)]; return true; }
-    std::uint64_t rawQty = 0; if (rawCode != hot.size() || !readVarint(escape, escapeEnd, rawQty)) return false; qty = static_cast<std::int64_t>(rawQty); return true;
-}
-
 bool runModeCandidate(const Batch& batch, const BookState& state, std::int64_t priceScale, std::uint64_t& bidCount, std::uint64_t& askCount) noexcept {
     bidCount = 0; askCount = 0; bool seenAsk = false; std::int64_t prevBid = -1; std::int64_t prevAsk = -1;
     for (const auto& raw : batch.levels) {
@@ -195,47 +177,140 @@ bool runModeCandidate(const Batch& batch, const BookState& state, std::int64_t p
     return bidCount != 0u || askCount != 0u;
 }
 
-bool readFile(const std::filesystem::path& path, std::vector<std::uint8_t>& out) noexcept { return internal::readFileBytes(path, out); }
-Status emitText(const std::string& text, const DecodedBlockCallback& onBlock) noexcept { return onBlock(std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(text.data()), text.size()}) ? Status::Ok : Status::CallbackStopped; }
-Status decodeBytes(std::span<const std::uint8_t> data, std::string* jsonl, std::ostream* encoded) noexcept {
-    Header h{}; if (!readHeader(data, h)) return Status::CorruptData;
-    std::size_t offset = kHeaderBytes; if (data.size() - offset < h.hotQtyBytes || h.priceModeBytes != 0u) return Status::CorruptData; std::vector<std::int64_t> hot(h.hotQtyCount);
-    const auto* hp = data.data() + offset; const auto* he = hp + h.hotQtyBytes; for (auto& qty : hot) if (!readLe(hp, he, qty)) return Status::CorruptData; offset += h.hotQtyBytes;
-    std::span<const std::int64_t> bidHot{hot.data(), h.bidHotCount}; std::span<const std::int64_t> askHot{hot.data() + h.bidHotCount, hot.size() - h.bidHotCount};
-    std::span<const std::uint8_t> batchS, sideS, priceModeS, deleteS, priceS, codeS, escapeS;
-    if (!take(data, offset, h.batchBytes, batchS) || !take(data, offset, h.sideBytes, sideS) || !take(data, offset, h.priceModeBytes, priceModeS) || !take(data, offset, h.deleteBytes, deleteS) || !take(data, offset, h.priceBytes, priceS) || !take(data, offset, h.qtyCodeBytes, codeS) || !take(data, offset, h.qtyEscapeBytes, escapeS) || offset != data.size()) return Status::CorruptData;
-    const auto* batch = batchS.data(); const auto* batchEnd = batchS.data() + batchS.size(); const auto* price = priceS.data(); const auto* priceEnd = priceS.data() + priceS.size(); const auto* code = codeS.data(); const auto* codeEnd = codeS.data() + codeS.size(); const auto* escape = escapeS.data(); const auto* escapeEnd = escapeS.data() + escapeS.size();
-    BitReader sideBits{sideS.data(), sideS.data() + sideS.size()}; BitReader deleteBits{deleteS.data(), deleteS.data() + deleteS.size()}; BookState state; std::int64_t ts = h.baseTsUnit;
+bool readFile(const std::filesystem::path& path, std::vector<std::uint8_t>& out) { return internal::readFileBytes(path, out); }
+Status emitText(const std::string& text, const DecodedBlockCallback& onBlock) { return onBlock(std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(text.data()), text.size()}) ? Status::Ok : Status::CallbackStopped; }
+Status decodeColumns(const internal::DecodeSource& source, const DecodedBlockCallback* jsonl, std::ostream* encoded) {
+    std::array<std::uint8_t, kHeaderBytes> bytes{};
+    Header h{};
+    if (!source.read(0u, bytes) || !readHeader(bytes, h) || h.outputBytes != source.size()
+        || h.priceModeBytes != 0u || h.timeScale <= 0 || h.priceScale <= 0 || h.qtyScale <= 0
+        || h.batchCount == 0u || h.levelCount == 0u || h.batchCount > h.batchBytes / 3u
+        || h.levelCount > h.priceBytes || h.deleteBytes != h.levelCount / 8u + (h.levelCount % 8u != 0u)) return Status::CorruptData;
+    std::uint64_t offset = kHeaderBytes;
+    std::array<std::int64_t, kHotQtyCount * 2u> hot{};
+    std::array<std::uint8_t, kHotQtyCount * 2u * sizeof(std::int64_t)> hotBytes{};
+    if (!source.read(offset, std::span{hotBytes}.first(h.hotQtyBytes))) return Status::CorruptData;
+    const auto* hp = hotBytes.data(); const auto* he = hp + h.hotQtyBytes;
+    for (std::uint32_t i = 0; i < h.hotQtyCount; ++i) if (!readLe(hp, he, hot[i])) return Status::CorruptData;
+    offset += h.hotQtyBytes;
+    const std::span<const std::int64_t> bidHot{hot.data(), h.bidHotCount};
+    const std::span<const std::int64_t> askHot{hot.data() + h.bidHotCount, h.hotQtyCount - h.bidHotCount};
+    auto next = [&](std::uint32_t count) {
+        auto result = source.cursor(offset, count);
+        if (source.contains(offset, count)) offset += count;
+        return result;
+    };
+    auto batch = next(h.batchBytes), side = next(h.sideBytes), priceMode = next(h.priceModeBytes), deleted = next(h.deleteBytes);
+    auto price = next(h.priceBytes), code = next(h.qtyCodeBytes), escape = next(h.qtyEscapeBytes);
+    if (!batch || !side || !priceMode || !deleted || !price || !code || !escape || offset != source.size()) return Status::CorruptData;
+    internal::DecodeBits sideBits{*side}, deleteBits{*deleted};
+    const DecodedBlockCallback ignore = [](auto) { return true; };
+    internal::DecodeOutput output(jsonl ? *jsonl : ignore);
+    BookState state;
+    std::int64_t ts = h.baseTsUnit;
+    std::uint64_t totalLevels{}, deletes{}, escapes{}, runs{}, explicitBatches{}, offsetPrices{}, absolutePrices{};
     if (encoded) { *encoded << "{\n  \"pipeline_id\": \"hftmac.depth_ladder_offset_v3\",\n  \"version\": " << h.version << ",\n  \"batch_count\": " << h.batchCount << ",\n  \"hot_qty\": {\"bid\": ["; for (std::size_t i = 0; i < bidHot.size(); ++i) *encoded << (i ? ", " : "") << bidHot[i]; *encoded << "], \"ask\": ["; for (std::size_t i = 0; i < askHot.size(); ++i) *encoded << (i ? ", " : "") << askHot[i]; *encoded << "]},\n  \"batches\": [\n"; }
     for (std::uint64_t bi = 0; bi < h.batchCount; ++bi) {
-        std::uint64_t dt = 0, levelCount = 0, mode = 0; if (!readVarint(batch, batchEnd, dt) || !readVarint(batch, batchEnd, levelCount) || !readVarint(batch, batchEnd, mode)) return Status::CorruptData; ts += static_cast<std::int64_t>(dt);
-        const bool runMode = mode != 0u; std::uint64_t bidCount = 0, askCount = 0; if (runMode && (!readVarint(batch, batchEnd, bidCount) || !readVarint(batch, batchEnd, askCount) || bidCount + askCount != levelCount)) return Status::CorruptData;
-        const auto bestBid = state.bestBid; const auto bestAsk = state.bestAsk; std::vector<Level> levels; levels.reserve(static_cast<std::size_t>(levelCount));
+        std::uint64_t dt{}, levelCount{}, mode{};
+        if (!batch->varint(dt) || !batch->varint(levelCount) || !batch->varint(mode) || mode > 1u
+            || levelCount == 0u || levelCount > h.levelCount - totalLevels || levelCount > price->remaining()
+            || dt > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())
+            || !internal::addI64(ts, static_cast<std::int64_t>(dt), ts)) return Status::CorruptData;
+        const bool runMode = mode != 0u;
+        std::uint64_t bidCount{}, askCount{};
+        if (runMode) {
+            if (!batch->varint(bidCount) || !batch->varint(askCount) || bidCount > levelCount || askCount != levelCount - bidCount
+                || (bidCount && !state.haveBid) || (askCount && !state.haveAsk)) return Status::CorruptData;
+            ++runs;
+        } else ++explicitBatches;
+        // The format encodes every level against the book *before* this batch.
+        // Apply actual levels immediately, retaining only the current book;
+        // captured best/have values remain unchanged until batch completion.
+        const auto bestBid = state.bestBid, bestAsk = state.bestAsk;
+        const bool haveBid = state.haveBid, haveAsk = state.haveAsk;
         if (encoded && bi < kInspectBatchLimit) *encoded << (bi ? ",\n" : "") << "    {\"dt\": " << dt << ", \"level_count\": " << levelCount << ", \"mode\": \"" << (runMode ? "side_runs_offset_gaps" : "explicit") << "\", \"best_before\": {\"bid\": " << bestBid << ", \"ask\": " << bestAsk << "}, \"levels\": [";
-        auto readOne = [&](std::int64_t side, bool offsetMode, std::int64_t& prevOffset, std::uint64_t localIndex) -> bool {
-            if (!offsetMode) { bool sb = false; if (!sideBits.bit(sb)) return false; side = sb ? 1 : 0; }
-            std::uint64_t rawPrice = 0; if (!readVarint(price, priceEnd, rawPrice)) return false;
-            std::int64_t offsetValue = 0; std::int64_t priceTick = 0;
-            if (offsetMode) { offsetValue = localIndex == 0 ? static_cast<std::int64_t>(rawPrice) : prevOffset + static_cast<std::int64_t>(rawPrice); prevOffset = offsetValue; priceTick = side == 0 ? bestBid - offsetValue : bestAsk + offsetValue; }
-            else {
-                const bool haveSide = side == 0 ? state.haveBid : state.haveAsk;
-                if (haveSide) { offsetValue = unzigzag(rawPrice); priceTick = side == 0 ? bestBid - offsetValue : bestAsk + offsetValue; }
-                else { priceTick = unzigzag(rawPrice); }
+        if (jsonl && !output.append("[")) return output.status;
+        std::uint64_t emittedLevels{};
+        auto readOne = [&](std::int64_t sideValue, bool offsetMode, std::int64_t& prevOffset, std::uint64_t localIndex) -> Status {
+            if (!offsetMode) {
+                std::uint64_t value{};
+                if (!sideBits.bits(1u, value)) return Status::CorruptData;
+                sideValue = static_cast<std::int64_t>(value);
             }
-            bool deleted = false; if (!deleteBits.bit(deleted)) return false; std::int64_t qty = 0; if (!deleted && !readQty(side, bidHot, askHot, code, codeEnd, escape, escapeEnd, qty)) return false;
-            levels.push_back(Level{priceTick, qty, side});
-            if (encoded && bi < kInspectBatchLimit) *encoded << (levels.size() > 1 ? ", " : "") << "{\"side\": " << side << ", \"price\": " << priceTick << ", \"offset\": " << (offsetMode ? offsetValue : 0) << ", \"delete\": " << (deleted ? "true" : "false") << ", \"qty\": " << qty << "}";
-            return true;
+            std::uint64_t rawPrice{};
+            if (!price->varint(rawPrice)) return Status::CorruptData;
+            std::int64_t offsetValue{}, priceTick{};
+            const bool haveSide = sideValue == 0 ? haveBid : haveAsk;
+            if (offsetMode) {
+                if (rawPrice > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) return Status::CorruptData;
+                offsetValue = static_cast<std::int64_t>(rawPrice);
+                if (localIndex != 0u && !internal::addI64(prevOffset, offsetValue, offsetValue)) return Status::CorruptData;
+                prevOffset = offsetValue;
+            } else offsetValue = internal::decodeZigzag(rawPrice);
+            if (offsetMode || haveSide) {
+                const bool ok = sideValue == 0 ? internal::subtractI64(bestBid, offsetValue, priceTick)
+                                              : internal::addI64(bestAsk, offsetValue, priceTick);
+                if (!ok) return Status::CorruptData;
+                ++offsetPrices;
+            } else { priceTick = offsetValue; ++absolutePrices; }
+            std::uint64_t deleteValue{};
+            if (!deleteBits.bits(1u, deleteValue)) return Status::CorruptData;
+            std::int64_t qty{};
+            if (deleteValue) ++deletes;
+            else {
+                const auto table = sideValue == 0 ? bidHot : askHot;
+                std::uint64_t rawCode{};
+                if (!code->varint(rawCode)) return Status::CorruptData;
+                if (rawCode < table.size()) qty = table[static_cast<std::size_t>(rawCode)];
+                else {
+                    std::uint64_t rawQty{};
+                    if (rawCode != table.size() || !escape->varint(rawQty)) return Status::CorruptData;
+                    qty = static_cast<std::int64_t>(rawQty); ++escapes;
+                }
+            }
+            std::int64_t priceValue{}, qtyValue{};
+            if (!internal::multiplyI64(priceTick, h.priceScale, priceValue) || !internal::multiplyI64(qty, h.qtyScale, qtyValue)) return Status::CorruptData;
+            if (encoded && bi < kInspectBatchLimit) *encoded << (emittedLevels ? ", " : "") << "{\"side\": " << sideValue << ", \"price\": " << priceTick << ", \"offset\": " << (offsetMode ? offsetValue : 0) << ", \"delete\": " << (deleteValue ? "true" : "false") << ", \"qty\": " << qty << "}";
+            if (jsonl) {
+                const auto row = "[" + std::to_string(priceValue) + "," + std::to_string(qtyValue) + "," + std::to_string(sideValue) + "]";
+                if ((emittedLevels && !output.append(",")) || !output.append(row)) return output.status;
+            }
+            // No header-driven reserve: storage grows only after a complete,
+            // validated price/quantity/side was actually consumed.
+            state.apply(sideValue, priceTick, qty);
+            ++emittedLevels; ++totalLevels;
+            return Status::Ok;
         };
-        if (runMode) { std::int64_t prev = 0; for (std::uint64_t i = 0; i < bidCount; ++i) if (!readOne(0, true, prev, i)) return Status::CorruptData; prev = 0; for (std::uint64_t i = 0; i < askCount; ++i) if (!readOne(1, true, prev, i)) return Status::CorruptData; }
-        else { std::int64_t prev = 0; for (std::uint64_t i = 0; i < levelCount; ++i) if (!readOne(0, false, prev, 0)) return Status::CorruptData; }
+        std::int64_t prev{};
+        if (runMode) {
+            for (std::uint64_t i = 0; i < bidCount; ++i) { const auto status = readOne(0, true, prev, i); if (!isOk(status)) return status; }
+            prev = 0;
+            for (std::uint64_t i = 0; i < askCount; ++i) { const auto status = readOne(1, true, prev, i); if (!isOk(status)) return status; }
+        } else {
+            for (std::uint64_t i = 0; i < levelCount; ++i) { const auto status = readOne(0, false, prev, 0); if (!isOk(status)) return status; }
+        }
         if (encoded && bi < kInspectBatchLimit) *encoded << "]}";
-        if (jsonl) { *jsonl += "["; for (std::size_t i = 0; i < levels.size(); ++i) { if (i) *jsonl += ","; const auto& l = levels[i]; *jsonl += "[" + std::to_string(l.price * h.priceScale) + "," + std::to_string(l.qty * h.qtyScale) + "," + std::to_string(l.side) + "]"; } *jsonl += "," + std::to_string(ts * h.timeScale) + "]\n"; }
-        for (const auto& level : levels) state.apply(level.side, level.price, level.qty); state.recompute();
+        std::int64_t timeValue{};
+        if (!internal::multiplyI64(ts, h.timeScale, timeValue)) return Status::CorruptData;
+        if (jsonl && !output.append("," + std::to_string(timeValue) + "]\n")) return output.status;
+        state.recompute();
     }
-    if (batch != batchEnd || price != priceEnd || code != codeEnd || escape != escapeEnd) return Status::CorruptData;
+    if (batch->remaining() || price->remaining() || code->remaining() || escape->remaining()
+        || !sideBits.finished() || !deleteBits.finished() || totalLevels != h.levelCount
+        || deletes != h.deleteCount || escapes != h.qtyEscapeCount || runs != h.runModeBatchCount
+        || explicitBatches != h.fallbackBatchCount || offsetPrices != h.offsetPriceCount || absolutePrices != h.absolutePriceCount
+        || (jsonl && output.produced != h.inputBytes)) return Status::CorruptData;
+    if (jsonl && !output.flush()) return output.status;
     if (encoded) { if (h.batchCount > kInspectBatchLimit) *encoded << "\n  ],\n  \"truncated\": true,\n  \"shown_batches\": " << kInspectBatchLimit << "\n}\n"; else *encoded << "\n  ],\n  \"truncated\": false\n}\n"; }
     return Status::Ok;
+}
+
+Status decodeBytes(std::span<const std::uint8_t> data, std::string* jsonl, std::ostream* encoded) noexcept {
+    try {
+        internal::SpanDecodeSource source(data);
+        const DecodedBlockCallback append = [&](auto bytes) { jsonl->append(reinterpret_cast<const char*>(bytes.data()), bytes.size()); return true; };
+        return decodeColumns(source, jsonl ? &append : nullptr, encoded);
+    } catch (...) { return Status::DecodeError; }
 }
 
 std::string statsJson(const Header& h) {
@@ -246,7 +321,7 @@ std::string statsJson(const Header& h) {
 
 }  // namespace
 
-CompressionResult compress(const CompressionRequest& request, const PipelineDescriptor& pipeline) noexcept {
+CompressionResult compress(const CompressionRequest& request, const PipelineDescriptor& pipeline) noexcept try {
     if (request.inputPath.empty()) { auto result = internal::fail(Status::InvalidArgument, request, &pipeline, "input path is empty");  return result; }
     if (inferStreamTypeFromPath(request.inputPath) != StreamType::Depth) { auto result = internal::fail(Status::UnsupportedStream, request, &pipeline, "expected depth.jsonl");  return result; }
     CompressionResult result{}; internal::applyPipeline(result, &pipeline); result.streamType = StreamType::Depth; result.inputPath = request.inputPath; const auto totalStart = timing::nowNs();
@@ -276,13 +351,40 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     const auto outputPath = internal::outputPathFor(request, pipeline, StreamType::Depth); std::error_code dirEc; std::filesystem::create_directories(outputPath.parent_path(), dirEc); if (dirEc) { auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to create output directory");  return failed; }
     result.outputPath = outputPath; result.metricsPath = outputPath.parent_path() / (outputPath.stem().string() + ".metrics.json"); const auto writeStart = timing::nowNs(); std::ofstream out(outputPath, std::ios::binary | std::ios::trunc); const auto header = serializeHeader(h, hot); out.write(reinterpret_cast<const char*>(header.data()), static_cast<std::streamsize>(header.size())); out.write(reinterpret_cast<const char*>(batchStream.data()), static_cast<std::streamsize>(batchStream.size())); out.write(reinterpret_cast<const char*>(sideStream.data()), static_cast<std::streamsize>(sideStream.size())); out.write(reinterpret_cast<const char*>(deleteStream.data()), static_cast<std::streamsize>(deleteStream.size())); out.write(reinterpret_cast<const char*>(priceStream.data()), static_cast<std::streamsize>(priceStream.size())); out.write(reinterpret_cast<const char*>(qtyCodeStream.data()), static_cast<std::streamsize>(qtyCodeStream.size())); out.write(reinterpret_cast<const char*>(qtyEscapeStream.data()), static_cast<std::streamsize>(qtyEscapeStream.size())); out.close(); result.writeNs = timing::nowNs() - writeStart; result.outputBytes = h.outputBytes; result.lineCount = h.batchCount; result.blockCount = 1; result.encodeNs = timing::nowNs() - totalStart;
     std::vector<std::uint8_t> file; (void)readFile(outputPath, file); std::string decoded; const auto decodeStart = timing::nowNs(); const auto decodeCycles = timing::readCycles(); const auto decodeStatus = decodeBytes(file, &decoded, nullptr); result.decodeCycles = timing::readCycles() - decodeCycles; result.decodeNs = timing::nowNs() - decodeStart; result.decodeCoreNs = result.decodeNs; result.roundtripOk = isOk(decodeStatus) && decoded.size() == input.size() && std::equal(decoded.begin(), decoded.end(), reinterpret_cast<const char*>(input.data())); result.status = result.roundtripOk ? Status::Ok : Status::DecodeError; if (!result.roundtripOk) result.error = "roundtrip check failed"; (void)internal::writeTextFile(result.metricsPath, toMetricsJson(result));  return result;
-}
+} catch (...) { CompressionResult failed{}; failed.status = Status::DecodeError; return failed; }
 
-ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept { std::vector<std::uint8_t> data; ReplayArtifactInfo info{}; info.path = path; if (!readFile(path, data)) { info.status = Status::IoError; info.error = "failed to read artifact"; return info; } Header h{}; if (!readHeader(data, h)) { info.status = Status::CorruptData; info.error = "invalid depth ladder artifact"; return info; } info.status = Status::Ok; info.found = true; info.formatId = "hftmac.depth_ladder_offset.v3"; info.pipelineId = std::string{pipeline.id}; info.transform = std::string{pipeline.transform}; info.entropy = std::string{pipeline.entropy}; info.streamType = StreamType::Depth; info.version = h.version; info.inputBytes = h.inputBytes; info.outputBytes = h.outputBytes; info.lineCount = h.batchCount; info.blockCount = 1; return info; }
-Status decode(std::span<const std::uint8_t> bytes, const DecodedBlockCallback& onBlock) noexcept { std::string out; const auto status = decodeBytes(bytes, &out, nullptr); if (!isOk(status)) return status; return emitText(out, onBlock); }
-Status decodeFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; return decode(data, onBlock); }
-Status inspectEncodedJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; std::ostringstream out; const auto status = decodeBytes(data, nullptr, &out); if (!isOk(status)) return status; return emitText(out.str(), onBlock); }
-Status inspectEncodedBinaryFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; Header h{}; if (!readHeader(data, h)) return Status::CorruptData; std::ostringstream out; out << "depth_ladder_offset_v3" << " bytes=" << data.size() << " header=" << kHeaderBytes << " hot_qty=" << h.hotQtyBytes << " batch=" << h.batchBytes << " side=" << h.sideBytes << " price_mode=" << h.priceModeBytes << " delete=" << h.deleteBytes << " price=" << h.priceBytes << " qty_code=" << h.qtyCodeBytes << " qty_escape=" << h.qtyEscapeBytes << "\n"; return emitText(out.str(), onBlock); }
-Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; Header h{}; if (!readHeader(data, h)) return Status::CorruptData; return emitText(statsJson(h), onBlock); }
+ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept try { internal::FileDecodeSource source(path); std::array<std::uint8_t, kHeaderBytes> data{}; ReplayArtifactInfo info{}; info.path = path; if (!source.valid() || !source.read(0u, data)) { info.status = Status::IoError; info.error = "failed to read artifact"; return info; } Header h{}; if (!readHeader(data, h) || h.outputBytes != source.size() || !source.unchanged()) { info.status = Status::CorruptData; info.error = "invalid depth ladder artifact"; return info; } info.status = Status::Ok; info.found = true; info.formatId = "hftmac.depth_ladder_offset.v3"; info.pipelineId = std::string{pipeline.id}; info.transform = std::string{pipeline.transform}; info.entropy = std::string{pipeline.entropy}; info.streamType = StreamType::Depth; info.version = h.version; info.inputBytes = h.inputBytes; info.outputBytes = h.outputBytes; info.lineCount = h.batchCount; info.blockCount = 1; return info; } catch (...) { ReplayArtifactInfo failed{}; failed.status = Status::DecodeError; return failed; }
+Status decodeSource(const internal::DecodeSource& source, const DecodedBlockCallback& onBlock) {
+    if (!onBlock) return Status::InvalidArgument;
+    return decodeColumns(source, &onBlock, nullptr);
+}
+Status decode(std::span<const std::uint8_t> bytes, const DecodedBlockCallback& onBlock) noexcept {
+    if (!onBlock) return Status::InvalidArgument;
+    try {
+        internal::SpanDecodeSource source(bytes);
+        const DecodedBlockCallback validate = [](auto) { return true; };
+        auto status = decodeSource(source, validate);
+        if (!isOk(status)) return status;
+        if (!source.unchanged()) return Status::CorruptData;
+        status = decodeSource(source, onBlock);
+        return !source.unchanged() ? Status::CorruptData : status;
+    } catch (...) { return Status::DecodeError; }
+}
+Status decodeFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept {
+    if (path.empty() || !onBlock) return Status::InvalidArgument;
+    try {
+        internal::FileDecodeSource source(path);
+        if (!source.valid()) return Status::IoError;
+        const DecodedBlockCallback validate = [](auto) { return true; };
+        auto status = decodeSource(source, validate);
+        if (!isOk(status)) return status;
+        if (!source.unchanged()) return Status::CorruptData;
+        status = decodeSource(source, onBlock);
+        return !source.unchanged() ? Status::CorruptData : status;
+    } catch (...) { return Status::DecodeError; }
+}
+Status inspectEncodedJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept try { std::vector<std::uint8_t> data; if (!readFile(path, data)) return Status::IoError; std::ostringstream out; const auto status = decodeBytes(data, nullptr, &out); if (!isOk(status)) return status; return emitText(out.str(), onBlock); } catch (...) { return Status::DecodeError; }
+Status inspectEncodedBinaryFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept try { internal::FileDecodeSource source(path); std::array<std::uint8_t, kHeaderBytes> data{}; if (!source.valid() || !source.read(0u, data)) return Status::IoError; Header h{}; if (!readHeader(data, h) || h.outputBytes != source.size() || !source.unchanged()) return Status::CorruptData; std::ostringstream out; out << "depth_ladder_offset_v3" << " bytes=" << source.size() << " header=" << kHeaderBytes << " hot_qty=" << h.hotQtyBytes << " batch=" << h.batchBytes << " side=" << h.sideBytes << " price_mode=" << h.priceModeBytes << " delete=" << h.deleteBytes << " price=" << h.priceBytes << " qty_code=" << h.qtyCodeBytes << " qty_escape=" << h.qtyEscapeBytes << "\n"; return emitText(out.str(), onBlock); } catch (...) { return Status::DecodeError; }
+Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept try { internal::FileDecodeSource source(path); std::array<std::uint8_t, kHeaderBytes> data{}; if (!source.valid() || !source.read(0u, data)) return Status::IoError; Header h{}; if (!readHeader(data, h) || h.outputBytes != source.size() || !source.unchanged()) return Status::CorruptData; return emitText(statsJson(h), onBlock); } catch (...) { return Status::DecodeError; }
 
 }  // namespace hft_compressor::codecs::depth_ladder_offset

@@ -98,7 +98,10 @@ bool isSupportedVersion(std::uint16_t version) noexcept {
 }
 
 std::uint32_t crc32c(std::span<const std::uint8_t> data) noexcept {
-    std::uint32_t crc = 0xffffffffu;
+    return ~updateCrc32c(0xffffffffu, data);
+}
+
+std::uint32_t updateCrc32c(std::uint32_t crc, std::span<const std::uint8_t> data) noexcept {
     for (const std::uint8_t byte : data) {
         crc ^= byte;
         for (std::uint32_t bit = 0; bit < 8u; ++bit) {
@@ -106,7 +109,7 @@ std::uint32_t crc32c(std::span<const std::uint8_t> data) noexcept {
             crc = (crc >> 1u) ^ (kCrc32cPolynomial & mask);
         }
     }
-    return ~crc;
+    return crc;
 }
 
 std::uint32_t storedHeaderCrc32c(const FileHeader& header) noexcept {

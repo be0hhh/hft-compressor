@@ -46,23 +46,6 @@ struct BitWriter {
     }
 };
 
-struct BitReader {
-    std::span<const std::uint8_t> bytes{};
-    std::size_t bytePos{0};
-    std::uint8_t bitPos{0};
-
-    bool bit() noexcept {
-        if (bytePos >= bytes.size()) return false;
-        const bool out = ((bytes[bytePos] >> (7u - bitPos)) & 1u) != 0u;
-        ++bitPos;
-        if (bitPos == 8u) {
-            bitPos = 0;
-            ++bytePos;
-        }
-        return out;
-    }
-};
-
 struct BitModel {
     std::uint32_t zero{1};
     std::uint32_t one{1};
@@ -170,56 +153,131 @@ std::vector<std::uint8_t> arithmeticEncode(std::span<const std::uint8_t> input, 
     return out.bytes;
 }
 
-Status arithmeticDecode(std::span<const std::uint8_t> encoded,
-                        EntropyKind kind,
-                        std::uint64_t decodedBytes,
-                        std::vector<std::uint8_t>& out) noexcept {
-    const ArithmeticProfile profile = profileFor(kind);
-    std::vector<BitModel> models(profile.contextCount);
-    BitReader bits{encoded};
-    std::uint32_t low = 0;
-    std::uint32_t high = kTopValue;
-    std::uint32_t code = 0;
-    for (std::uint32_t i = 0; i < 32u; ++i) code = (code << 1u) | (bits.bit() ? 1u : 0u);
+namespace {
 
-    out.clear();
-    out.reserve(static_cast<std::size_t>(decodedBytes));
-    std::uint8_t previous = 0;
-    for (std::uint64_t i = 0; i < decodedBytes; ++i) {
-        std::uint8_t byte = 0;
-        for (std::uint8_t bitIndex = 0; bitIndex < 8u; ++bitIndex) {
-            auto& model = models[contextFor(profile, previous, bitIndex)];
-            const std::uint64_t range = static_cast<std::uint64_t>(high) - low + 1u;
-            const std::uint64_t scaled = (((static_cast<std::uint64_t>(code) - low + 1u) * model.total()) - 1u) / range;
-            const bool bit = scaled >= model.zero;
-            const std::uint32_t split = static_cast<std::uint32_t>(low + ((range * model.zero) / model.total()) - 1u);
-            if (bit) low = split + 1u;
-            else high = split;
+// Encoder and decoder share interval/model rules. Verification emits the
+// encoder's exact final bits into a second compressed-input cursor, including
+// byte padding. This distinguishes a complete stream from an arbitrary CRC-
+// valid prefix or a false decoded-size declaration without storing output.
+class ArithmeticCursor final : public internal::DecodeCursor {
+    ArithmeticProfile profile_;
+    std::array<BitModel, 4096> models_{};
+    std::unique_ptr<internal::DecodeCursor> input_;
+    std::unique_ptr<internal::DecodeCursor> comparison_;
+    std::uint64_t remaining_{};
+    std::uint32_t low_{}, high_{kTopValue}, code_{};
+    std::uint64_t pending_{};
+    std::uint8_t previous_{}, current_{}, bitPos_{8}, virtualBits_{};
+    std::uint8_t emitted_{}, emittedBits_{};
+    bool good_{true};
 
-            for (;;) {
-                if (high < kHalf) {
-                } else if (low >= kHalf) {
-                    code -= kHalf;
-                    low -= kHalf;
-                    high -= kHalf;
-                } else if (low >= kFirstQuarter && high < kThirdQuarter) {
-                    code -= kFirstQuarter;
-                    low -= kFirstQuarter;
-                    high -= kFirstQuarter;
-                } else {
-                    break;
-                }
-                low <<= 1u;
-                high = (high << 1u) | 1u;
-                code = (code << 1u) | (bits.bit() ? 1u : 0u);
+    bool bit() {
+        if (bitPos_ == 8u) {
+            if (input_->remaining() == 0u) {
+                // The existing encoder emits the final interval plus <=7 byte
+                // padding bits. A 32-bit lookahead needs at most 30 more zero
+                // bits. Exact encoder comparison below proves termination.
+                if (++virtualBits_ > 30u) good_ = false;
+                return false;
             }
-            model.update(bit, profile.maxTotal);
-            byte = static_cast<std::uint8_t>((byte << 1u) | (bit ? 1u : 0u));
+            if (!input_->byte(current_)) { good_ = false; return false; }
+            bitPos_ = 0;
         }
-        out.push_back(byte);
-        previous = byte;
+        return ((current_ >> (7u - bitPos_++)) & 1u) != 0u;
     }
+    void emit(bool value) {
+        if (!comparison_) return;
+        emitted_ = static_cast<std::uint8_t>((emitted_ << 1u) | value);
+        if (++emittedBits_ == 8u) {
+            std::uint8_t expected{};
+            if (!comparison_->byte(expected) || expected != emitted_) good_ = false;
+            emitted_ = 0; emittedBits_ = 0;
+        }
+    }
+    void emitPending(bool value) {
+        emit(value);
+        while (pending_ != 0u) { emit(!value); --pending_; }
+    }
+public:
+    ArithmeticCursor(const internal::DecodeSource& encoded, const Header& header, bool verify)
+        : profile_(profileFor(static_cast<EntropyKind>(header.entropy))),
+          input_(encoded.cursor(kHeaderBytes, header.payloadBytes)),
+          comparison_(verify ? encoded.cursor(kHeaderBytes, header.payloadBytes) : nullptr),
+          remaining_(header.baseBytes) {
+        if (!input_ || (verify && !comparison_)) { good_ = false; return; }
+        for (unsigned i = 0; i < 32u; ++i) code_ = (code_ << 1u) | bit();
+    }
+    std::uint64_t remaining() const noexcept override { return remaining_; }
+    bool byte(std::uint8_t& out) override {
+        if (!good_ || remaining_ == 0u) return false;
+        std::uint8_t value{};
+        for (std::uint8_t bitIndex = 0; bitIndex < 8u; ++bitIndex) {
+            if (code_ < low_ || code_ > high_) return good_ = false;
+            auto& model = models_[contextFor(profile_, previous_, bitIndex)];
+            const std::uint64_t range = static_cast<std::uint64_t>(high_) - low_ + 1u;
+            const std::uint64_t scaled = (((static_cast<std::uint64_t>(code_) - low_ + 1u) * model.total()) - 1u) / range;
+            const bool valueBit = scaled >= model.zero;
+            const auto split = static_cast<std::uint32_t>(low_ + ((range * model.zero) / model.total()) - 1u);
+            if (valueBit) low_ = split + 1u;
+            else high_ = split;
+            for (;;) {
+                if (high_ < kHalf) emitPending(false);
+                else if (low_ >= kHalf) {
+                    emitPending(true); code_ -= kHalf; low_ -= kHalf; high_ -= kHalf;
+                } else if (low_ >= kFirstQuarter && high_ < kThirdQuarter) {
+                    if (pending_ == std::numeric_limits<std::uint64_t>::max()) return good_ = false;
+                    ++pending_; code_ -= kFirstQuarter; low_ -= kFirstQuarter; high_ -= kFirstQuarter;
+                } else break;
+                low_ <<= 1u; high_ = (high_ << 1u) | 1u;
+                code_ = (code_ << 1u) | bit();
+                if (!good_) return false;
+            }
+            model.update(valueBit, profile_.maxTotal);
+            value = static_cast<std::uint8_t>((value << 1u) | valueBit);
+        }
+        --remaining_; previous_ = value; out = value; return good_;
+    }
+    bool finish() {
+        if (!good_ || remaining_ != 0u || !comparison_) return false;
+        if (pending_ == std::numeric_limits<std::uint64_t>::max()) return false;
+        ++pending_; emitPending(low_ >= kFirstQuarter);
+        if (emittedBits_ != 0u) {
+            while (emittedBits_ != 0u) emit(false);
+        }
+        return good_ && comparison_->remaining() == 0u && input_->remaining() == 0u;
+    }
+};
+
+} // namespace
+
+std::unique_ptr<internal::DecodeCursor> arithmeticCursor(const internal::DecodeSource& encoded, const Header& header) {
+    return std::make_unique<ArithmeticCursor>(encoded, header, false);
+}
+
+Status verifyPayload(const internal::DecodeSource& file, Header& header) {
+    auto status = readHeader(file, header);
+    if (!isOk(status)) return status;
+    auto payload = file.cursor(kHeaderBytes, header.payloadBytes);
+    if (!payload) return Status::IoError;
+    auto buffer = std::make_unique<std::array<std::uint8_t, 65536>>();
+    std::uint32_t payloadCrc = 0xffffffffu;
+    while (payload->remaining() != 0u) {
+        const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(payload->remaining(), buffer->size()));
+        auto bytes = std::span{*buffer}.first(count);
+        if (!payload->read(bytes)) return Status::CorruptData;
+        payloadCrc = format::updateCrc32c(payloadCrc, bytes);
+    }
+    if (~payloadCrc != header.payloadCrc32c) return Status::CorruptData;
+    auto decoded = std::make_unique<ArithmeticCursor>(file, header, true);
+    std::uint32_t decodedCrc = 0xffffffffu;
+    while (decoded->remaining() != 0u) {
+        const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(decoded->remaining(), buffer->size()));
+        auto bytes = std::span{*buffer}.first(count);
+        if (!decoded->read(bytes)) return Status::CorruptData;
+        decodedCrc = format::updateCrc32c(decodedCrc, bytes);
+    }
+    if (!decoded->finish() || ~decodedCrc != header.decodedCrc32c || !file.unchanged()) return Status::CorruptData;
     return Status::Ok;
 }
 
-}
+} // namespace hft_compressor::codecs::entropy_hftmac::detail

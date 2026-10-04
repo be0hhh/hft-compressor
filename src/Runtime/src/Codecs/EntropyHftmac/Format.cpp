@@ -23,10 +23,11 @@ namespace hft_compressor::codecs::entropy_hftmac::detail {
 namespace {
 
 template <typename T>
-void writeLe(std::vector<std::uint8_t>& out, T value) {
+void writeLe(std::span<std::uint8_t>& out, T value) {
     for (std::size_t i = 0; i < sizeof(T); ++i) {
-        out.push_back(static_cast<std::uint8_t>((static_cast<std::uint64_t>(value) >> (i * 8u)) & 0xffu));
+        out[i] = static_cast<std::uint8_t>((static_cast<std::uint64_t>(value) >> (i * 8u)) & 0xffu);
     }
+    out = out.subspan(sizeof(T));
 }
 
 template <typename T>
@@ -41,10 +42,11 @@ bool readLe(const std::uint8_t*& p, const std::uint8_t* end, T& out) noexcept {
 
 }
 
-std::vector<std::uint8_t> serializeHeader(Header header, bool includeCrc) {
+namespace {
+std::array<std::uint8_t, kHeaderBytes> fixedHeader(Header header, bool includeCrc) noexcept {
     if (!includeCrc) header.headerCrc32c = 0u;
-    std::vector<std::uint8_t> out;
-    out.reserve(kHeaderBytes);
+    std::array<std::uint8_t, kHeaderBytes> bytes{};
+    std::span<std::uint8_t> out{bytes};
     writeLe(out, header.magic);
     writeLe(out, header.version);
     writeLe(out, header.entropy);
@@ -58,12 +60,17 @@ std::vector<std::uint8_t> serializeHeader(Header header, bool includeCrc) {
     writeLe(out, header.payloadBytes);
     writeLe(out, header.payloadCrc32c);
     writeLe(out, header.decodedCrc32c);
-    out.resize(kHeaderBytes, 0u);
-    return out;
+    return bytes;
+}
 }
 
-std::uint32_t headerCrc32c(const Header& header) {
-    return format::crc32c(serializeHeader(header, false));
+std::vector<std::uint8_t> serializeHeader(Header header, bool includeCrc) {
+    const auto bytes = fixedHeader(header, includeCrc);
+    return {bytes.begin(), bytes.end()};
+}
+
+std::uint32_t headerCrc32c(const Header& header) noexcept {
+    return format::crc32c(fixedHeader(header, false));
 }
 
 bool parseHeader(const std::uint8_t* data, std::size_t size, Header& out) noexcept {
@@ -82,7 +89,8 @@ bool parseHeader(const std::uint8_t* data, std::size_t size, Header& out) noexce
         && readLe(p, end, out.lineCount)
         && readLe(p, end, out.payloadBytes)
         && readLe(p, end, out.payloadCrc32c)
-        && readLe(p, end, out.decodedCrc32c);
+        && readLe(p, end, out.decodedCrc32c)
+        && std::all_of(p, end, [](auto byte) { return byte == 0u; });
 }
 
 bool validHeader(const Header& header) noexcept {
@@ -92,7 +100,9 @@ bool validHeader(const Header& header) noexcept {
         && header.base <= static_cast<std::uint16_t>(BaseKind::Depth)
         && header.entropy >= static_cast<std::uint16_t>(EntropyKind::Ac16Ctx0)
         && header.entropy <= static_cast<std::uint16_t>(EntropyKind::RansByteStatic)
-        && format::streamFromWire(header.stream) != StreamType::Unknown
+        && format::streamFromWire(header.stream) == (header.base == 1u ? StreamType::Trades : header.base == 2u ? StreamType::BookTicker : StreamType::Depth)
+        && header.baseBytes != 0u && header.payloadBytes != 0u
+        && header.payloadBytes <= std::numeric_limits<std::uint64_t>::max() - kHeaderBytes
         && header.headerCrc32c == headerCrc32c(header)
         && header.outputBytes == kHeaderBytes + header.payloadBytes;
 }

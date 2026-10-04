@@ -49,6 +49,8 @@ bool parseFileHeader(const std::uint8_t* data, std::size_t len, FileHeader& out)
 bool parseBlockHeader(const std::uint8_t* data, std::size_t len, BlockHeader& out) noexcept;
 bool isSupportedVersion(std::uint16_t version) noexcept;
 std::uint32_t crc32c(std::span<const std::uint8_t> data) noexcept;
+// State is the uncomplemented running CRC; initialize to 0xffffffffu.
+std::uint32_t updateCrc32c(std::uint32_t state, std::span<const std::uint8_t> data) noexcept;
 std::uint32_t storedHeaderCrc32c(const FileHeader& header) noexcept;
 std::uint32_t headerCrc32c(const FileHeader& header) noexcept;
 void setHeaderCrc32c(FileHeader& header, std::uint32_t crc) noexcept;

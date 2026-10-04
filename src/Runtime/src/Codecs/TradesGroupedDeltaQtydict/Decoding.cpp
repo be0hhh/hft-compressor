@@ -1,38 +1,29 @@
 #include "TradesGroupedDeltaQtyDictInternal.hpp"
+#include "../BaseDecode.hpp"
 
 namespace hft_compressor::codecs::trades_grouped_delta_qtydict::codec_detail {
 
 
-bool readFile(const std::filesystem::path& path, std::vector<std::uint8_t>& out) noexcept {
+bool readFile(const std::filesystem::path& path, std::vector<std::uint8_t>& out) {
     return internal::readFileBytes(path, out);
 }
 
 Status decodeChunk(
                    const ChunkHeader& header,
                    std::span<const std::int64_t> hotQty,
-                   std::span<const std::uint8_t> timeStream,
-                   std::span<const std::uint8_t> priceStream,
-                   std::span<const std::uint8_t> sideStream,
-                   std::span<const std::uint8_t> dpZeroStream,
-                   std::span<const std::uint8_t> countOneStream,
-                   std::span<const std::uint8_t> priceGroupCountOneStream,
-                   std::span<const std::uint8_t> qtyCodeStream,
-                   std::span<const std::uint8_t> qtyEscapeStream,
+                   internal::DecodeCursor& time,
+                   internal::DecodeCursor& price,
+                   internal::DecodeCursor& side,
+                   internal::DecodeCursor& dpZero,
+                   internal::DecodeCursor& countOne,
+                   internal::DecodeCursor& priceGroupCountOne,
+                   internal::DecodeCursor& qtyCode,
+                   internal::DecodeCursor& qtyEscape,
                    std::string_view lineEnding,
-                   std::string* jsonlOut,
-                   std::ostream* encodedJsonOut) noexcept {
-    const auto* time = timeStream.data();
-    const auto* timeEnd = timeStream.data() + timeStream.size();
-    const auto* price = priceStream.data();
-    const auto* priceEnd = priceStream.data() + priceStream.size();
-    const auto* qtyEscape = qtyEscapeStream.data();
-    const auto* qtyEscapeEnd = qtyEscapeStream.data() + qtyEscapeStream.size();
-    BitReader sideBits{sideStream.data(), sideStream.size()};
-    BitReader dpZeroBits{dpZeroStream.data(), dpZeroStream.size()};
-    BitReader countOneBits{countOneStream.data(), countOneStream.size()};
-    BitReader priceGroupCountOneBits{priceGroupCountOneStream.data(), priceGroupCountOneStream.size()};
-    BitReader qtyCodeBits{qtyCodeStream.data(), qtyCodeStream.size()};
-
+                   internal::DecodeOutput* jsonlOut,
+                   std::ostream* encodedJsonOut) {
+    internal::DecodeBits sideBits{side}, dpZeroBits{dpZero}, countOneBits{countOne};
+    internal::DecodeBits priceGroupCountOneBits{priceGroupCountOne}, qtyCodeBits{qtyCode};
     const auto priceScale = header.priceScale;
     const auto qtyScale = header.qtyScale;
     const auto timeScale = header.timeScale;
@@ -52,12 +43,14 @@ Status decodeChunk(
     for (std::uint32_t tg = 0; tg < header.timeGroupCount; ++tg) {
         std::uint64_t dt = 0;
         std::uint64_t groupCount = 0;
-        if (!readVarint(time, timeEnd, dt)) return Status::CorruptData;
+        if (!time.varint(dt)) return Status::CorruptData;
         std::uint64_t oneGroup = 0;
-        if (!priceGroupCountOneBits.readBits(1u, oneGroup)) return Status::CorruptData;
+        if (!priceGroupCountOneBits.bits(1u, oneGroup)) return Status::CorruptData;
         if (oneGroup != 0u) groupCount = 1u;
-        else if (!readVarint(time, timeEnd, groupCount)) return Status::CorruptData;
-        ts += static_cast<std::int64_t>(dt);
+        else if (!time.varint(groupCount)) return Status::CorruptData;
+        if (dt > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())
+            || !internal::addI64(ts, static_cast<std::int64_t>(dt), ts)
+            || groupCount == 0u || groupCount > header.priceGroupCount - priceGroups) return Status::CorruptData;
         if (encodedJsonOut != nullptr) {
             if (tg != 0u) *encodedJsonOut << ",\n";
             *encodedJsonOut << "        [" << dt << ", [";
@@ -67,23 +60,25 @@ Status decodeChunk(
             std::uint64_t side = 0;
             std::uint64_t tradeCount = 0;
             std::int64_t dp = 0;
-            if (!sideBits.readBits(1u, side)) return Status::CorruptData;
+            if (!sideBits.bits(1u, side)) return Status::CorruptData;
             std::uint64_t dpZero = 0;
             std::uint64_t countOne = 0;
-            if (!dpZeroBits.readBits(1u, dpZero) || !countOneBits.readBits(1u, countOne)) return Status::CorruptData;
+            if (!dpZeroBits.bits(1u, dpZero) || !countOneBits.bits(1u, countOne)) return Status::CorruptData;
             if (dpZero == 0u) {
-                if (!readVarint(price, priceEnd, zz)) return Status::CorruptData;
-                dp = unzigzag(zz);
+                if (!price.varint(zz)) return Status::CorruptData;
+                dp = internal::decodeZigzag(zz);
             }
             if (countOne != 0u) {
                 tradeCount = 1u;
-            } else if (!readVarint(price, priceEnd, tradeCount)) {
+            } else if (!price.varint(tradeCount)) {
                 return Status::CorruptData;
             } else {
+                if (tradeCount > std::numeric_limits<std::uint64_t>::max() - 2u) return Status::CorruptData;
                 tradeCount += 2u;
             }
-            if (side > 1u || tradeCount == 0u) return Status::CorruptData;
-            const auto currentPrice = previousPrice + dp;
+            if (side > 1u || tradeCount == 0u || tradeCount > header.recordCount - records) return Status::CorruptData;
+            std::int64_t currentPrice{};
+            if (!internal::addI64(previousPrice, dp, currentPrice)) return Status::CorruptData;
             previousPrice = currentPrice;
             if (encodedJsonOut != nullptr) {
                 if (pg != 0u) *encodedJsonOut << ", ";
@@ -91,13 +86,13 @@ Status decodeChunk(
             }
             for (std::uint64_t i = 0; i < tradeCount; ++i) {
                 std::uint64_t code = 0;
-                if (!qtyCodeBits.readBits(header.hotQtyBits, code)) return Status::CorruptData;
+                if (!qtyCodeBits.bits(header.hotQtyBits, code)) return Status::CorruptData;
                 std::int64_t qty = 0;
                 if (code < hotQty.size()) {
                     qty = hotQty[static_cast<std::size_t>(code)];
                 } else if (code == ((1u << header.hotQtyBits) >> 1u)) {
                     std::uint64_t rawQty = 0;
-                    if (!readVarint(qtyEscape, qtyEscapeEnd, rawQty)) return Status::CorruptData;
+                    if (!qtyEscape.varint(rawQty)) return Status::CorruptData;
                     qty = static_cast<std::int64_t>(rawQty);
                     ++qtyEscapes;
                 } else {
@@ -108,16 +103,13 @@ Status decodeChunk(
                     *encodedJsonOut << code;
                 }
                 if (jsonlOut != nullptr) {
-                    jsonlOut->append("[");
-                    jsonlOut->append(std::to_string(currentPrice * priceScale));
-                    jsonlOut->append(",");
-                    jsonlOut->append(std::to_string(qty * qtyScale));
-                    jsonlOut->append(",");
-                    jsonlOut->append(std::to_string(side));
-                    jsonlOut->append(",");
-                    jsonlOut->append(std::to_string(ts * timeScale));
-                    jsonlOut->append("]");
-                    jsonlOut->append(lineEnding);
+                    std::int64_t priceValue{}, qtyValue{}, timeValue{};
+                    if (!internal::multiplyI64(currentPrice, priceScale, priceValue)
+                        || !internal::multiplyI64(qty, qtyScale, qtyValue)
+                        || !internal::multiplyI64(ts, timeScale, timeValue)) return Status::CorruptData;
+                    const auto row = "[" + std::to_string(priceValue) + "," + std::to_string(qtyValue)
+                        + "," + std::to_string(side) + "," + std::to_string(timeValue) + "]";
+                    if (!jsonlOut->append(row) || !jsonlOut->append(lineEnding)) return jsonlOut->status;
                 }
                 ++records;
             }
@@ -129,21 +121,25 @@ Status decodeChunk(
         if (encodedJsonOut != nullptr) *encodedJsonOut << "]]";
     }
     if (encodedJsonOut != nullptr) *encodedJsonOut << "\n      ]\n    ]";
-    if (time != timeEnd || price != priceEnd || qtyEscape != qtyEscapeEnd) return Status::CorruptData;
+    if (time.remaining() || price.remaining() || qtyEscape.remaining()
+        || !sideBits.finished() || !dpZeroBits.finished() || !countOneBits.finished()
+        || !priceGroupCountOneBits.finished() || !qtyCodeBits.finished()) return Status::CorruptData;
     if (records != header.recordCount || priceGroups != header.priceGroupCount || qtyEscapes != header.qtyEscapeCount) return Status::CorruptData;
     return Status::Ok;
 }
 
-Status walkFile(std::span<const std::uint8_t> file,
+Status walkSource(const internal::DecodeSource& file,
                 const DecodedBlockCallback* onJsonl,
                 std::ostream* encodedJsonOut,
                 std::ostream* binaryDumpOut,
-                FileHeader* parsedHeader) noexcept {
-    if (file.size() < kFileHeaderBytes) return Status::InvalidArgument;
+                FileHeader* parsedHeader) {
+    if (file.size() < kFileHeaderBytes) return Status::CorruptData;
+    std::array<std::uint8_t, kFileHeaderBytes> headerBytes{};
+    if (!file.read(0u, headerBytes)) return Status::CorruptData;
     FileHeader header{};
-    if (!parseFileHeader(file.data(), file.size(), header) || !validHeader(header)) return Status::CorruptData;
+    if (!parseFileHeader(headerBytes.data(), headerBytes.size(), header) || !validHeader(header)) return Status::CorruptData;
     if (header.headerCrc32c != headerCrc32c(header)) return Status::CorruptData;
-    if (header.outputBytes != 0u && header.outputBytes != file.size()) return Status::CorruptData;
+    if (header.outputBytes != file.size() || header.chunkCount > (file.size() - kFileHeaderBytes) / kChunkHeaderBytes) return Status::CorruptData;
     if (parsedHeader != nullptr) *parsedHeader = header;
     if (encodedJsonOut != nullptr) {
         *encodedJsonOut << "{\n"
@@ -157,79 +153,66 @@ Status walkFile(std::span<const std::uint8_t> file,
     if (binaryDumpOut != nullptr) {
         *binaryDumpOut << "{\"file_header_bytes\":" << kFileHeaderBytes << ",\"chunks\":[";
     }
-    std::size_t offset = kFileHeaderBytes;
-    std::uint64_t records = 0;
+    const DecodedBlockCallback ignore = [](auto) { return true; };
+    internal::DecodeOutput output(onJsonl == nullptr ? ignore : *onJsonl);
+    std::uint64_t offset = kFileHeaderBytes;
+    std::uint64_t records = 0, timeGroups = 0, priceGroups = 0, qtyEscapes = 0;
+    auto buffer = std::make_unique<std::array<std::uint8_t, 65536>>();
     for (std::uint64_t chunkIndex = 0; chunkIndex < header.chunkCount; ++chunkIndex) {
-        if (file.size() - offset < kChunkHeaderBytes) return Status::CorruptData;
+        if (!file.contains(offset, kChunkHeaderBytes)) return Status::CorruptData;
+        std::array<std::uint8_t, kChunkHeaderBytes> chunkBytes{};
+        if (!file.read(offset, chunkBytes)) return Status::CorruptData;
         ChunkHeader chunk{};
-        if (!parseChunkHeader(file.data() + offset, file.size() - offset, chunk) || !validChunkHeader(chunk)) return Status::CorruptData;
+        if (!parseChunkHeader(chunkBytes.data(), chunkBytes.size(), chunk) || !validChunkHeader(chunk)) return Status::CorruptData;
         const auto chunkStart = offset;
         offset += kChunkHeaderBytes;
-        std::size_t payloadStart = offset;
-        std::vector<std::int64_t> hotQty;
-        hotQty.reserve(chunk.hotQtyCount);
-        if (file.size() - offset < chunk.hotQtyTableBytes) return Status::CorruptData;
-        const auto* hotQtyPtr = file.data() + offset;
-        const auto* hotQtyEnd = hotQtyPtr + chunk.hotQtyTableBytes;
-        for (std::uint32_t i = 0; i < chunk.hotQtyCount; ++i) {
-            std::uint64_t qty = 0;
-            if (!readVarint(hotQtyPtr, hotQtyEnd, qty)) return Status::CorruptData;
-            hotQty.push_back(static_cast<std::int64_t>(qty));
-        }
-        if (hotQtyPtr != hotQtyEnd) return Status::CorruptData;
-        offset += chunk.hotQtyTableBytes;
-        const auto streamsSize = static_cast<std::size_t>(chunk.timeStreamBytes)
+        if (chunk.recordCount > header.chunkRecords || records > header.recordCount
+            || chunk.recordCount > header.recordCount - records || chunk.hotQtyTableBytes > chunk.hotQtyCount * 10u
+            || chunk.hotQtyCount > ((1u << chunk.hotQtyBits) >> 1u)
+            || chunk.hotQtyBits == 0u || chunk.priceScale <= 0 || chunk.qtyScale <= 0 || chunk.timeScale <= 0
+            || chunk.timeGroupCount > chunk.priceGroupCount || chunk.priceGroupCount > chunk.recordCount) return Status::CorruptData;
+        const std::uint64_t streamsSize = static_cast<std::uint64_t>(chunk.timeStreamBytes)
             + chunk.priceStreamBytes + chunk.sideStreamBytes + chunk.dpZeroStreamBytes + chunk.countOneStreamBytes
             + chunk.priceGroupCountOneStreamBytes + chunk.qtyCodeStreamBytes + chunk.qtyEscapeStreamBytes;
-        if (file.size() - offset < streamsSize) return Status::CorruptData;
-        const auto payloadSize = (offset - payloadStart) + streamsSize;
-        const auto* payloadData = file.data() + payloadStart;
-        std::vector<std::uint8_t> payload;
-        payload.insert(payload.end(), payloadData, payloadData + payloadSize);
-        if (format::crc32c(payload) != chunk.payloadCrc32c) return Status::CorruptData;
-
-        std::size_t streamOffset = offset;
-        std::span<const std::uint8_t> timeStream{file.data() + streamOffset, chunk.timeStreamBytes};
-        streamOffset += chunk.timeStreamBytes;
-        std::span<const std::uint8_t> priceStream{file.data() + streamOffset, chunk.priceStreamBytes};
-        streamOffset += chunk.priceStreamBytes;
-        std::span<const std::uint8_t> sideStream{file.data() + streamOffset, chunk.sideStreamBytes};
-        streamOffset += chunk.sideStreamBytes;
-        std::span<const std::uint8_t> dpZeroStream{file.data() + streamOffset, chunk.dpZeroStreamBytes};
-        streamOffset += chunk.dpZeroStreamBytes;
-        std::span<const std::uint8_t> countOneStream{file.data() + streamOffset, chunk.countOneStreamBytes};
-        streamOffset += chunk.countOneStreamBytes;
-        std::span<const std::uint8_t> priceGroupCountOneStream{file.data() + streamOffset, chunk.priceGroupCountOneStreamBytes};
-        streamOffset += chunk.priceGroupCountOneStreamBytes;
-        std::span<const std::uint8_t> qtyCodeStream{file.data() + streamOffset, chunk.qtyCodeStreamBytes};
-        streamOffset += chunk.qtyCodeStreamBytes;
-        std::span<const std::uint8_t> qtyEscapeStream{file.data() + streamOffset, chunk.qtyEscapeStreamBytes};
-
+        const auto payloadSize = chunk.hotQtyTableBytes + streamsSize;
+        if (!file.contains(offset, payloadSize)) return Status::CorruptData;
+        auto payload = file.cursor(offset, payloadSize);
+        if (!payload) return Status::CorruptData;
+        std::uint32_t crc = 0xffffffffu;
+        while (payload->remaining()) {
+            auto bytes = std::span{*buffer}.first(static_cast<std::size_t>(std::min<std::uint64_t>(payload->remaining(), buffer->size())));
+            if (!payload->read(bytes)) return Status::CorruptData;
+            crc = format::updateCrc32c(crc, bytes);
+        }
+        if (~crc != chunk.payloadCrc32c) return Status::CorruptData;
+        auto table = file.cursor(offset, chunk.hotQtyTableBytes);
+        if (!table) return Status::CorruptData;
+        std::array<std::int64_t, 128> hotQty{};
+        for (std::uint32_t i = 0; i < chunk.hotQtyCount; ++i) {
+            std::uint64_t qty{};
+            if (!table->varint(qty)) return Status::CorruptData;
+            hotQty[i] = static_cast<std::int64_t>(qty);
+        }
+        if (table->remaining()) return Status::CorruptData;
+        offset += chunk.hotQtyTableBytes;
+        auto next = [&](std::uint32_t count) {
+            auto input = file.cursor(offset, count); offset += count; return input;
+        };
+        auto time = next(chunk.timeStreamBytes), price = next(chunk.priceStreamBytes), side = next(chunk.sideStreamBytes);
+        auto dpZero = next(chunk.dpZeroStreamBytes), countOne = next(chunk.countOneStreamBytes);
+        auto priceGroupCountOne = next(chunk.priceGroupCountOneStreamBytes), qtyCode = next(chunk.qtyCodeStreamBytes);
+        auto qtyEscape = next(chunk.qtyEscapeStreamBytes);
+        if (!time || !price || !side || !dpZero || !countOne || !priceGroupCountOne || !qtyCode || !qtyEscape) return Status::CorruptData;
         if (encodedJsonOut != nullptr) {
             if (chunkIndex != 0u) *encodedJsonOut << ",\n";
             *encodedJsonOut << "    [" << chunkIndex << ", " << chunk.recordCount << ", ";
         }
-        std::string jsonl;
-        jsonl.reserve(static_cast<std::size_t>(chunk.recordCount) * 32u);
-        const auto decodeStatus = decodeChunk(
-                                              chunk,
-                                              {hotQty.data(), hotQty.size()},
-                                              timeStream,
-                                              priceStream,
-                                              sideStream,
-                                              dpZeroStream,
-                                              countOneStream,
-                                              priceGroupCountOneStream,
-                                              qtyCodeStream,
-                                              qtyEscapeStream,
-                                              header.lineEnding == 2u ? std::string_view{"\r\n"} : std::string_view{"\n"},
-                                              onJsonl == nullptr ? nullptr : &jsonl,
-                                              encodedJsonOut);
+        const auto decodeStatus = decodeChunk(chunk, {hotQty.data(), chunk.hotQtyCount},
+            *time, *price, *side, *dpZero, *countOne, *priceGroupCountOne, *qtyCode, *qtyEscape,
+            header.lineEnding == 2u ? std::string_view{"\r\n"} : std::string_view{"\n"},
+            onJsonl == nullptr ? nullptr : &output, encodedJsonOut);
         if (!isOk(decodeStatus)) return decodeStatus;
         if (encodedJsonOut != nullptr) *encodedJsonOut << "\n    ]";
-        if (onJsonl != nullptr && !jsonl.empty()) {
-            if (!(*onJsonl)(std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(jsonl.data()), jsonl.size()})) return Status::Ok;
-        }
         if (binaryDumpOut != nullptr) {
             if (chunkIndex != 0u) *binaryDumpOut << ',';
             *binaryDumpOut << "{\"chunk\":" << chunkIndex
@@ -244,13 +227,23 @@ Status walkFile(std::span<const std::uint8_t> file,
                            << ",\"checksum\":" << chunk.payloadCrc32c << '}';
         }
         records += chunk.recordCount;
-        offset += streamsSize;
+        timeGroups += chunk.timeGroupCount; priceGroups += chunk.priceGroupCount; qtyEscapes += chunk.qtyEscapeCount;
+
     }
     if (offset != file.size()) return Status::CorruptData;
-    if (records != header.recordCount) return Status::CorruptData;
+    if (records != header.recordCount || timeGroups != header.timeGroupCount || priceGroups != header.priceGroupCount
+        || qtyEscapes != header.qtyEscapeCount || (onJsonl && output.produced != header.inputBytes)) return Status::CorruptData;
+    if (onJsonl && !output.flush()) return output.status;
     if (encodedJsonOut != nullptr) *encodedJsonOut << "\n  ]\n}\n";
     if (binaryDumpOut != nullptr) *binaryDumpOut << "]}\n";
     return Status::Ok;
+}
+Status walkFile(std::span<const std::uint8_t> file, const DecodedBlockCallback* onJsonl,
+                std::ostream* encodedJsonOut, std::ostream* binaryDumpOut, FileHeader* parsedHeader) noexcept {
+    try {
+        internal::SpanDecodeSource source(file);
+        return walkSource(source, onJsonl, encodedJsonOut, binaryDumpOut, parsedHeader);
+    } catch (...) { return Status::DecodeError; }
 }
 }  // namespace codec_detail
 
@@ -258,15 +251,35 @@ namespace hft_compressor::codecs::trades_grouped_delta_qtydict {
 using namespace codec_detail;
 
 
+Status decodeSource(const internal::DecodeSource& source, const DecodedBlockCallback& onBlock) {
+    if (!onBlock) return Status::InvalidArgument;
+    return walkSource(source, &onBlock, nullptr, nullptr, nullptr);
+}
+
 Status decode(std::span<const std::uint8_t> file, const DecodedBlockCallback& onBlock) noexcept {
     if (!onBlock) return Status::InvalidArgument;
-    return walkFile(file, &onBlock, nullptr, nullptr);
+    try {
+        internal::SpanDecodeSource source(file);
+        const DecodedBlockCallback validate = [](auto) { return true; };
+        auto status = decodeSource(source, validate);
+        if (!isOk(status)) return status;
+        if (!source.unchanged()) return Status::CorruptData;
+        status = decodeSource(source, onBlock);
+        return !source.unchanged() ? Status::CorruptData : status;
+    } catch (...) { return Status::DecodeError; }
 }
 
 Status decodeFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept {
     if (path.empty() || !onBlock) return Status::InvalidArgument;
-    std::vector<std::uint8_t> file;
-    if (!readFile(path, file)) return Status::IoError;
-    return decode(file, onBlock);
+    try {
+        internal::FileDecodeSource source(path);
+        if (!source.valid()) return Status::IoError;
+        const DecodedBlockCallback validate = [](auto) { return true; };
+        auto status = decodeSource(source, validate);
+        if (!isOk(status)) return status;
+        if (!source.unchanged()) return Status::CorruptData;
+        status = decodeSource(source, onBlock);
+        return !source.unchanged() ? Status::CorruptData : status;
+    } catch (...) { return Status::DecodeError; }
 }
 }  // namespace hft_compressor::codecs::trades_grouped_delta_qtydict

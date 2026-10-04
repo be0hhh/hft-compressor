@@ -295,7 +295,7 @@ namespace hft_compressor::codecs::trades_grouped_delta_qtydict {
 using namespace codec_detail;
 
 
-CompressionResult compress(const CompressionRequest& request, const PipelineDescriptor& pipeline) noexcept {
+CompressionResult compress(const CompressionRequest& request, const PipelineDescriptor& pipeline) noexcept try {
     if (request.inputPath.empty()) {
         auto result = internal::fail(Status::InvalidArgument, request, &pipeline, "input path is empty");
         return result;
@@ -406,5 +406,5 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
 
     (void)internal::writeTextFile(result.metricsPath, toMetricsJson(result));
     return result;
-}
+} catch (...) { CompressionResult failed{}; failed.status = Status::DecodeError; return failed; }
 }  // namespace hft_compressor::codecs::trades_grouped_delta_qtydict

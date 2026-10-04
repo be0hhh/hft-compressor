@@ -1,4 +1,5 @@
 #include "TradesGroupedDeltaQtyDictInternal.hpp"
+#include "../../Common/DecodeSource.hpp"
 
 namespace hft_compressor::codecs::trades_grouped_delta_qtydict::codec_detail {
 
@@ -11,7 +12,7 @@ ReplayArtifactInfo failArtifact(const std::filesystem::path& path, Status status
     return info;
 }
 
-Status writeStringBlock(const std::string& text, const DecodedBlockCallback& onBlock) noexcept {
+Status writeStringBlock(const std::string& text, const DecodedBlockCallback& onBlock) {
     if (!onBlock) return Status::InvalidArgument;
     return onBlock(std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(text.data()), text.size()})
         ? Status::Ok
@@ -23,13 +24,14 @@ namespace hft_compressor::codecs::trades_grouped_delta_qtydict {
 using namespace codec_detail;
 
 
-ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept {
-    std::vector<std::uint8_t> file;
+ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept try {
     if (path.empty()) return failArtifact(path, Status::InvalidArgument, "artifact path is empty");
-    if (!readFile(path, file)) return failArtifact(path, Status::IoError, "failed to read artifact");
+    internal::FileDecodeSource file(path);
+    if (!file.valid()) return failArtifact(path, Status::IoError, "failed to read artifact");
     FileHeader header{};
-    const auto status = walkFile(file, nullptr, nullptr, nullptr, &header);
+    const auto status = walkSource(file, nullptr, nullptr, nullptr, &header);
     if (!isOk(status)) return failArtifact(path, status, "invalid trade grouped artifact");
+    if (!file.unchanged()) return failArtifact(path, Status::CorruptData, "artifact changed during inspection");
     ReplayArtifactInfo info{};
     info.status = Status::Ok;
     info.found = true;
@@ -45,27 +47,27 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const Pipe
     info.lineCount = header.recordCount;
     info.blockCount = header.chunkCount;
     return info;
-}
+} catch (...) { ReplayArtifactInfo failed{}; failed.status = Status::DecodeError; return failed; }
 
-Status inspectEncodedJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept {
+Status inspectEncodedJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept try {
     std::vector<std::uint8_t> file;
     if (!readFile(path, file)) return Status::IoError;
     std::ostringstream out;
     const auto status = walkFile(file, nullptr, &out, nullptr);
     if (!isOk(status)) return status;
     return writeStringBlock(out.str(), onBlock);
-}
+} catch (...) { return Status::DecodeError; }
 
-Status inspectEncodedBinaryFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept {
+Status inspectEncodedBinaryFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept try {
     std::vector<std::uint8_t> file;
     if (!readFile(path, file)) return Status::IoError;
     std::ostringstream out;
     const auto status = walkFile(file, nullptr, nullptr, &out);
     if (!isOk(status)) return status;
     return writeStringBlock(out.str(), onBlock);
-}
+} catch (...) { return Status::DecodeError; }
 
-Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept {
+Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept try {
     std::vector<std::uint8_t> file;
     if (!readFile(path, file)) return Status::IoError;
     FileHeader header{};
@@ -152,5 +154,5 @@ Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBloc
         << "  \"qty_escape_stream_bytes\": " << qtyEscapeStreamBytes << "\n"
         << "}\n";
     return writeStringBlock(out.str(), onBlock);
-}
+} catch (...) { return Status::DecodeError; }
 }  // namespace hft_compressor::codecs::trades_grouped_delta_qtydict

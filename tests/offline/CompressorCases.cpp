@@ -1,12 +1,20 @@
 #include "OfflineCase.hpp"
 #include "hft_compressor/Compressor.hpp"
 #include "hft_compressor/ReplayDecode.hpp"
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <unistd.h>
+
+// Exercise the actual CLI consumer without a subprocess or a test-only API.
+#define main compressorCliMain
+#include "../../src/Process/Main.cpp"
+#undef main
 
 namespace {
 using namespace hft_compressor;
@@ -99,6 +107,72 @@ void callbackBoundaries() {
   CXET_CHECK(decodeReplayArtifactRecordBatches(f.artifact(),1,[&](const ReplayRecordBatch&){++callbacks;return false;})==Status::CallbackStopped);
   CXET_CHECK(callbacks==1);
 }
+void callbackExceptionsRefuseRecordAdmission() {
+  Fixture f("trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math_v3");
+  CXET_CHECK(decodeReplayArtifactRecordBatches(f.artifact(),1,[](const auto&) -> bool {
+    throw std::runtime_error("consumer rejected row");
+  })==Status::DecodeError);
+  CXET_CHECK(decodeReplayArtifactRecordBatches(f.artifact(),1,[](const auto&) -> bool {
+    throw std::bad_alloc{};
+  })==Status::DecodeError);
+  const auto artifact=f.artifact();
+  const auto input=bytes(artifact.path);
+  CXET_CHECK(decodeReplayArtifactRecordBatches(artifact,1,[&](const auto&) {
+    std::fstream out(artifact.path,std::ios::binary|std::ios::in|std::ios::out);
+    out.seekp(static_cast<std::streamoff>(input.size()-1u));
+    out.put(static_cast<char>(input.back()^1u)); out.close(); CXET_CHECK(!out.fail());
+    return false;
+  })==Status::CorruptData);
+}
+void failedRoundtripCannotPublishOrOverwriteArtifact() {
+  Fixture f("trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math_v3");
+  // Valid native input grammar, deliberately not byte-canonical: the real
+  // encoder writes output, then its roundtrip consumer refuses admission.
+  { std::ofstream out(f.input,std::ios::binary|std::ios::trunc);
+    out << "[100000001, 200000003,0,1000000000]\n"; CXET_CHECK(out.good()); }
+  CompressionRequest request{}; request.inputPath=f.input;
+  request.pipelineId=f.result.pipelineId; request.outputPathOverride=f.root/"failure.hfc";
+  CXET_CHECK(!isOk(compress(request).status));
+  CXET_CHECK(!std::filesystem::exists(request.outputPathOverride));
+  { std::ofstream out(request.outputPathOverride,std::ios::binary); out << "existing artifact"; CXET_CHECK(out.good()); }
+  CXET_CHECK(!isOk(compress(request).status));
+  std::ifstream in(request.outputPathOverride,std::ios::binary);
+  const std::string retained{std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>()};
+  CXET_CHECK(retained=="existing artifact");
+  for (const auto& entry:std::filesystem::directory_iterator(f.root))
+    CXET_CHECK(entry.path().filename().string().find(".partial.")==std::string::npos);
+}
+void cliWriteFailureCannotReportInspectSuccess() {
+  Fixture f("trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math_v3");
+  struct StdoutGuard {
+    std::FILE* previous{stdout};
+    std::FILE* replacement{};
+    explicit StdoutGuard(const std::filesystem::path& path) {
+      replacement=std::fopen(path.c_str(),"rb"); CXET_CHECK(replacement);
+      stdout=replacement; // Any fwrite to this owned read-only stream fails.
+    }
+    ~StdoutGuard(){stdout=previous;std::fclose(replacement);}
+  } guard(f.result.outputPath);
+  std::array<std::string,6> arguments{"hft-compressor","inspect","--input",f.result.outputPath.string(),"--view","canonical-json"};
+  std::array<char*,6> argv{};
+  for (std::size_t i=0;i<argv.size();++i) argv[i]=arguments[i].data();
+  CXET_CHECK(compressorCliMain(static_cast<int>(argv.size()),argv.data())==1);
+}
+void nativeDiagnosticCallbackExceptionsReturnStatus() {
+  struct Input { const char* file; const char* rows; const char* pipeline; };
+  const Input inputs[]{
+    {"trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math_v3"},
+    {"bookticker.jsonl","[100000001,200000003,100000011,400000005,1000000000]\n","hftmac.bookticker_delta_mask_v2"},
+    {"depth.jsonl","[[100000001,200000003,0],[100000011,400000005,1],1000000000]\n","hftmac.depth_ladder_offset_v3"},
+  };
+  for (const auto& input:inputs) {
+    Fixture f(input.file,input.rows,input.pipeline);
+    for (const auto* view:{"encoded-json","encoded-binary","stats"})
+      CXET_CHECK(inspectCompressedArtifact(f.result.outputPath,input.pipeline,view,[](auto) -> bool {
+        throw std::runtime_error("diagnostic consumer failed");
+      })==Status::DecodeError);
+  }
+}
 }
 int main(int argc,char** argv) {
   const cxet::testing::Case cases[]{
@@ -110,5 +184,9 @@ int main(int argc,char** argv) {
     cxet::testing::Case{"compressor.truncated_block_refuses_decode",truncatedBlock},
     cxet::testing::Case{"compressor.unknown_pipeline_and_wrong_stream_refuse",unsupportedPipeline},
     cxet::testing::Case{"compressor.record_batch_boundary_and_callback_stop_are_exact",callbackBoundaries},
+    cxet::testing::Case{"compressor.consumer_callback_exceptions_refuse_record_admission",callbackExceptionsRefuseRecordAdmission},
+    cxet::testing::Case{"compressor.failed_roundtrip_cannot_publish_or_overwrite_artifact",failedRoundtripCannotPublishOrOverwriteArtifact},
+    cxet::testing::Case{"compressor.cli_write_failure_cannot_report_success",cliWriteFailureCannotReportInspectSuccess},
+    cxet::testing::Case{"compressor.native_diagnostic_callback_exceptions_return_status",nativeDiagnosticCallbackExceptionsReturnStatus},
   };return cxet::testing::runCases(argc,argv,cases);
 }

@@ -40,14 +40,12 @@ namespace hft_compressor::codecs::entropy_hftmac {
 using namespace detail;
 
 ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept {
-    std::vector<std::uint8_t> bytes;
-    const auto readStatus = readFile(path, bytes);
-    if (!isOk(readStatus)) return failArtifact(path, readStatus, "failed to read entropy artifact");
+    try {
+    internal::FileDecodeSource source(path);
+    if (!source.valid()) return failArtifact(path, Status::IoError, "failed to read entropy artifact");
     Header header{};
-    if (!parseHeader(bytes.data(), bytes.size(), header) || !validHeader(header)) {
-        return failArtifact(path, Status::CorruptData, "invalid entropy artifact header");
-    }
-    if (bytes.size() != header.outputBytes) return failArtifact(path, Status::CorruptData, "entropy artifact size mismatch");
+    const auto status = readHeader(source, header);
+    if (!isOk(status)) return failArtifact(path, status, "invalid entropy artifact header or size");
 
     ReplayArtifactInfo info{};
     info.status = Status::Ok;
@@ -64,32 +62,22 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const Pipe
     info.lineCount = header.lineCount;
     info.blockCount = 1u;
     return info;
+    } catch (...) { ReplayArtifactInfo failed{}; failed.status = Status::DecodeError; return failed; }
 }
 
 Status inspectEncodedJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept {
-    if (!onBlock) return Status::InvalidArgument;
-    std::vector<std::uint8_t> bytes;
-    const auto readStatus = readFile(path, bytes);
-    if (!isOk(readStatus)) return readStatus;
-    Header header{};
-    std::vector<std::uint8_t> baseBytes;
-    const auto status = decodePayload(bytes, header, baseBytes);
-    if (!isOk(status)) return status;
-    switch (static_cast<BaseKind>(header.base)) {
-        case BaseKind::Trades: return trades_grouped_delta_qtydict::decode(baseBytes, onBlock);
-        case BaseKind::BookTicker: return bookticker_delta_mask::decode(baseBytes, onBlock);
-        case BaseKind::Depth: return depth_ladder_offset::decode(baseBytes, onBlock);
-    }
-    return Status::CorruptData;
+    // This established view emits canonical JSONL for the entropy family.
+    return decodeFile(path, onBlock);
 }
 
 Status inspectEncodedBinaryFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept {
     if (!onBlock) return Status::InvalidArgument;
-    std::vector<std::uint8_t> bytes;
-    const auto readStatus = readFile(path, bytes);
-    if (!isOk(readStatus)) return readStatus;
+    try {
+    internal::FileDecodeSource source(path);
+    if (!source.valid()) return Status::IoError;
     Header header{};
-    if (!parseHeader(bytes.data(), bytes.size(), header) || !validHeader(header)) return Status::CorruptData;
+    const auto status = readHeader(source, header);
+    if (!isOk(status)) return status;
     std::ostringstream out;
     out << "entropy_hftmac bytes=" << header.outputBytes
         << " base_bytes=" << header.baseBytes
@@ -98,15 +86,17 @@ Status inspectEncodedBinaryFile(const std::filesystem::path& path, const Decoded
         << " stream=" << streamTypeToString(format::streamFromWire(header.stream)) << "\n";
     const auto text = out.str();
     return onBlock({reinterpret_cast<const std::uint8_t*>(text.data()), text.size()}) ? Status::Ok : Status::CallbackStopped;
+    } catch (...) { return Status::DecodeError; }
 }
 
 Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept {
     if (!onBlock) return Status::InvalidArgument;
-    std::vector<std::uint8_t> bytes;
-    const auto readStatus = readFile(path, bytes);
-    if (!isOk(readStatus)) return readStatus;
+    try {
+    internal::FileDecodeSource source(path);
+    if (!source.valid()) return Status::IoError;
     Header header{};
-    if (!parseHeader(bytes.data(), bytes.size(), header) || !validHeader(header)) return Status::CorruptData;
+    const auto status = readHeader(source, header);
+    if (!isOk(status)) return status;
     std::ostringstream out;
     out << "{\n"
         << "  \"pipeline_family\": \"entropy_hftmac\",\n"
@@ -120,6 +110,7 @@ Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBloc
         << "}\n";
     const auto text = out.str();
     return onBlock({reinterpret_cast<const std::uint8_t*>(text.data()), text.size()}) ? Status::Ok : Status::CallbackStopped;
+    } catch (...) { return Status::DecodeError; }
 }
 
 }
