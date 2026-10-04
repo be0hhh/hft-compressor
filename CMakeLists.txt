@@ -172,6 +172,10 @@ endif()
 add_custom_target(hft-compressor-product DEPENDS hft_compressor_core)
 add_custom_target(hft-compressor-all DEPENDS hft-compressor-product)
 
+if(CXET_LOCAL_TESTS)
+    cxet_offline_instrument(hft_compressor_core)
+endif()
+
 if(TARGET PkgConfig::LZ4)
     target_link_libraries(hft_compressor_core PUBLIC PkgConfig::LZ4)
 elseif(HFT_COMPRESSOR_WITH_LZ4)
