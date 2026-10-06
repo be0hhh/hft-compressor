@@ -26,11 +26,15 @@ struct BitWriter {
     std::vector<std::uint8_t> bytes{};
     std::uint8_t current{0};
     std::uint8_t bitCount{0};
+    std::size_t limit{std::numeric_limits<std::size_t>::max()};
+    bool good{true};
 
     void bit(bool value) {
+        if (!good) return;
         current = static_cast<std::uint8_t>((current << 1u) | (value ? 1u : 0u));
         ++bitCount;
         if (bitCount == 8u) {
+            if (bytes.size() == limit) { good = false; return; }
             bytes.push_back(current);
             current = 0;
             bitCount = 0;
@@ -39,6 +43,7 @@ struct BitWriter {
 
     void finish() {
         if (bitCount == 0u) return;
+        if (bytes.size() == limit) { good = false; return; }
         current = static_cast<std::uint8_t>(current << (8u - bitCount));
         bytes.push_back(current);
         current = 0;
@@ -95,7 +100,7 @@ std::uint32_t contextFor(const ArithmeticProfile& profile, std::uint8_t previous
 
 void emitBitPlusPending(BitWriter& out, bool bit, std::uint32_t& pending) {
     out.bit(bit);
-    while (pending != 0u) {
+    while (pending != 0u && out.good) {
         out.bit(!bit);
         --pending;
     }
@@ -109,9 +114,18 @@ void emitBitPlusPending(BitWriter& out, bool bit, std::uint32_t& pending) {
 // делится адаптивными частотами нулей/единиц, поэтому каждый бит стоит около
 // -log2(p(bit)).
 std::vector<std::uint8_t> arithmeticEncode(std::span<const std::uint8_t> input, EntropyKind kind) {
+    std::vector<std::uint8_t> output;
+    arithmeticEncodeBounded(input, kind, std::numeric_limits<std::size_t>::max(), output);
+    return output;
+}
+
+bool arithmeticEncodeBounded(std::span<const std::uint8_t> input, EntropyKind kind,
+                             std::size_t limit, std::vector<std::uint8_t>& output) {
     const ArithmeticProfile profile = profileFor(kind);
     std::vector<BitModel> models(profile.contextCount);
     BitWriter out;
+    out.limit = limit;
+    if (limit != std::numeric_limits<std::size_t>::max()) out.bytes.reserve(limit);
     std::uint32_t low = 0;
     std::uint32_t high = kTopValue;
     std::uint32_t pending = 0;
@@ -143,6 +157,7 @@ std::vector<std::uint8_t> arithmeticEncode(std::span<const std::uint8_t> input, 
                 high = (high << 1u) | 1u;
             }
             model.update(bit, profile.maxTotal);
+            if (!out.good) { output.clear(); return false; }
         }
         previous = byte;
     }
@@ -150,7 +165,9 @@ std::vector<std::uint8_t> arithmeticEncode(std::span<const std::uint8_t> input, 
     ++pending;
     emitBitPlusPending(out, low >= kFirstQuarter, pending);
     out.finish();
-    return out.bytes;
+    if (!out.good) { output.clear(); return false; }
+    output = std::move(out.bytes);
+    return true;
 }
 
 namespace {
@@ -200,10 +217,12 @@ class ArithmeticCursor final : public internal::DecodeCursor {
     }
 public:
     ArithmeticCursor(const internal::DecodeSource& encoded, const Header& header, bool verify)
-        : profile_(profileFor(static_cast<EntropyKind>(header.entropy))),
-          input_(encoded.cursor(kHeaderBytes, header.payloadBytes)),
-          comparison_(verify ? encoded.cursor(kHeaderBytes, header.payloadBytes) : nullptr),
-          remaining_(header.baseBytes) {
+        : ArithmeticCursor(encoded, kHeaderBytes, header.payloadBytes, header.baseBytes,
+                           static_cast<EntropyKind>(header.entropy), verify) {}
+    ArithmeticCursor(const internal::DecodeSource& encoded, std::size_t offset,
+                     std::size_t bytes, std::size_t decodedBytes, EntropyKind kind, bool verify)
+        : profile_(profileFor(kind)), input_(encoded.cursor(offset, bytes)),
+          comparison_(verify ? encoded.cursor(offset, bytes) : nullptr), remaining_(decodedBytes) {
         if (!input_ || (verify && !comparison_)) { good_ = false; return; }
         for (unsigned i = 0; i < 32u; ++i) code_ = (code_ << 1u) | bit();
     }
@@ -249,6 +268,13 @@ public:
 };
 
 } // namespace
+
+bool arithmeticDecodeBytes(std::span<const std::uint8_t> input, EntropyKind kind,
+                           std::span<std::uint8_t> output) {
+    internal::SpanDecodeSource source(input);
+    auto decoded = std::make_unique<ArithmeticCursor>(source, 0, input.size(), output.size(), kind, true);
+    return decoded->read(output) && decoded->finish();
+}
 
 std::unique_ptr<internal::DecodeCursor> arithmeticCursor(const internal::DecodeSource& encoded, const Header& header) {
     return std::make_unique<ArithmeticCursor>(encoded, header, false);

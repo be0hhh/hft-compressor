@@ -86,6 +86,13 @@ bool validHeader(const Header& header) noexcept;
 // -log2(p(bit)).
 std::vector<std::uint8_t> arithmeticEncode(std::span<const std::uint8_t> input, EntropyKind kind);
 
+// Cold byte blocks share the current arithmetic interval/model and exact
+// termination rules. A full encoded bound stops writing without growing it.
+bool arithmeticEncodeBounded(std::span<const std::uint8_t> input, EntropyKind kind,
+                             std::size_t limit, std::vector<std::uint8_t>& output);
+bool arithmeticDecodeBytes(std::span<const std::uint8_t> input, EntropyKind kind,
+                           std::span<std::uint8_t> output);
+
 std::unique_ptr<internal::DecodeCursor> arithmeticCursor(const internal::DecodeSource& encoded,
                                                        const Header& header);
 Status verifyPayload(const internal::DecodeSource& file, Header& header);

@@ -101,10 +101,13 @@ if(ZLIB_FOUND)
 endif()
 
 add_library(hft_compressor_core STATIC
+    src/Runtime/src/Codecs/ByteBlock/ByteBlock.cpp
     src/Api/src/CApi.cpp
     src/Runtime/src/Codecs/BooktickerDeltaMask/BookTickerDeltaMask.cpp
+    src/Runtime/src/Codecs/BooktickerDeltaMask/BinaryTransform.cpp
     src/Runtime/src/Codecs/BrotliJsonlBlocks/BrotliJsonlBlocks.cpp
     src/Runtime/src/Codecs/DepthLadderOffset/DepthLadderOffset.cpp
+    src/Runtime/src/Codecs/DepthLadderOffset/BinaryTransform.cpp
     src/Runtime/src/Codecs/EntropyHftmac/Format.cpp
     src/Runtime/src/Codecs/EntropyHftmac/Arithmetic.cpp
     src/Runtime/src/Codecs/EntropyHftmac/Encoding.cpp
@@ -116,6 +119,7 @@ add_library(hft_compressor_core STATIC
     src/Runtime/src/Codecs/StandardJsonlBlocks/StandardJsonlBlocks.cpp
     src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/Format.cpp
     src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/Encoding.cpp
+    src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/BinaryTransform.cpp
     src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/Decoding.cpp
     src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/Inspection.cpp
     src/Runtime/src/Codecs/XzJsonlBlocks/XzJsonlBlocks.cpp

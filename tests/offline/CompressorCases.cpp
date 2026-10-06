@@ -174,8 +174,22 @@ void nativeDiagnosticCallbackExceptionsReturnStatus() {
   }
 }
 }
+namespace byteblock_cases {
+void fullRecordBytesAndRegressingClocksRoundtrip();
+void blocksResetWithoutPreviousState();
+void corruptAndTruncatedBlocksNeverPublish();
+void boundsAndLayoutFailClosed();
+void repetitiveBlocksUseCompression();
+void extremeOpaqueBytesRespectWorstCaseBound();
+}
 int main(int argc,char** argv) {
   const cxet::testing::Case cases[]{
+    cxet::testing::Case{"compressor.byte_blocks_preserve_full_record_bytes_and_regressing_clocks",byteblock_cases::fullRecordBytesAndRegressingClocksRoundtrip},
+    cxet::testing::Case{"compressor.byte_blocks_reset_without_previous_state",byteblock_cases::blocksResetWithoutPreviousState},
+    cxet::testing::Case{"compressor.byte_blocks_corruption_never_publishes",byteblock_cases::corruptAndTruncatedBlocksNeverPublish},
+    cxet::testing::Case{"compressor.byte_blocks_bounds_and_layout_fail_closed",byteblock_cases::boundsAndLayoutFailClosed},
+    cxet::testing::Case{"compressor.byte_blocks_repetitive_records_use_compression",byteblock_cases::repetitiveBlocksUseCompression},
+    cxet::testing::Case{"compressor.byte_blocks_extreme_opaque_bytes_respect_bound",byteblock_cases::extremeOpaqueBytesRespectWorstCaseBound},
     cxet::testing::Case{"compressor.zstd_roundtrip_is_byte_and_record_exact",zstdBytes},
     cxet::testing::Case{"compressor.grouped_trade_batches_preserve_integer_rows",groupedTrades},
     cxet::testing::Case{"compressor.bbo_delta_mask_preserves_integer_values",bboMask},
