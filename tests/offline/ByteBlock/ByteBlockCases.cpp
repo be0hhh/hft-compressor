@@ -1,9 +1,12 @@
 #include "OfflineCase.hpp"
 #include "hft_compressor/ByteBlock.hpp"
-#include "../../src/Runtime/src/Container/Hfc/Format.hpp"
+#include "../../../src/Runtime/src/Container/Hfc/Format.hpp"
+#include "../../../src/Runtime/src/Codecs/ByteBlock/BinaryTransform.hpp"
+#include "../../../src/Runtime/src/Codecs/TradesGroupedDeltaQtydict/TradesGroupedDeltaQtyDictInternal.hpp"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <limits>
 #include <vector>
 
@@ -177,5 +180,120 @@ void extremeOpaqueBytesRespectWorstCaseBound() {
     CXET_CHECK(block.size()<=byteBlockEncodeBound(shape,256));
     std::vector<std::uint8_t> output(raw.size()); std::size_t bytes{};
     CXET_CHECK(decodeByteBlock(shape,block,output,bytes)==Status::Ok && output==raw);
+}
+void workspaceReusePreservesBytesAcrossLayouts() {
+    ByteBlockWorkspace workspace;
+    CXET_CHECK(workspace.prepare()==Status::Ok);
+    for (unsigned repeat=0;repeat<2;++repeat) {
+        for (auto type:{StreamType::Depth,StreamType::Unknown,StreamType::Trades,StreamType::BookTicker}) {
+            auto shape=layout(type);
+            if (repeat) shape.recordBytes=kByteBlockMaxRecordBytes;
+            for (auto count:{std::size_t{256},std::size_t{1},std::size_t{19}}) {
+                const auto raw=fixture(shape,count);
+                const auto reference=encode(shape,raw);
+                std::vector<std::uint8_t> block(byteBlockEncodeBound(shape,count),0x5a);
+                std::size_t bytes=999;
+                CXET_CHECK(encodeByteBlock(workspace,shape,raw,block,bytes)==Status::Ok);
+                block.resize(bytes);
+                CXET_CHECK(block==reference);
+                std::vector<std::uint8_t> output(raw.size()+7,0x5a);
+                CXET_CHECK(decodeByteBlock(workspace,shape,block,output,bytes)==Status::Ok);
+                CXET_CHECK(bytes==raw.size() && std::equal(raw.begin(),raw.end(),output.begin()));
+                CXET_CHECK(std::all_of(output.begin()+raw.size(),output.end(),[](auto byte){return byte==0x5a;}));
+                workspace.reset();
+                CXET_CHECK(workspace.prepare()==Status::Ok);
+            }
+        }
+    }
+}
+void workspaceFailuresNeverPublishAndRecover() {
+    const auto shape=layout(StreamType::BookTicker);
+    const auto raw=fixture(shape,8);
+    const auto reference=encode(shape,raw);
+    ByteBlockWorkspace workspace;
+    std::vector<std::uint8_t> block(byteBlockEncodeBound(shape,8),0x5a);
+    const auto blockBefore=block;
+    std::vector<std::uint8_t> output(raw.size(),0x5a); const auto outputBefore=output;
+    std::size_t bytes=999;
+    CXET_CHECK(encodeByteBlock(workspace,shape,raw,block,bytes)==Status::InvalidArgument);
+    CXET_CHECK(bytes==0 && block==blockBefore);
+    CXET_CHECK(decodeByteBlock(workspace,shape,reference,output,bytes)==Status::InvalidArgument);
+    CXET_CHECK(bytes==0 && output==outputBefore);
+    CXET_CHECK(workspace.prepare()==Status::Ok);
+    for (unsigned repeat=0;repeat<3;++repeat) {
+        auto changed=reference; changed.back()^=0x80;
+        CXET_CHECK(decodeByteBlock(workspace,shape,changed,output,bytes)==Status::CorruptData);
+        CXET_CHECK(bytes==0 && output==outputBefore);
+        // Valid payload/header checksums must not permit a wrong decoded CRC.
+        changed=reference; changed[28]^=0x80; repairHeader(changed);
+        CXET_CHECK(decodeByteBlock(workspace,shape,changed,output,bytes)==Status::CorruptData);
+        CXET_CHECK(bytes==0 && output==outputBefore);
+        CXET_CHECK(decodeByteBlock(workspace,shape,reference,std::span{output}.first(raw.size()-1),bytes)==Status::InvalidArgument);
+        CXET_CHECK(bytes==0 && output==outputBefore);
+        CXET_CHECK(encodeByteBlock(workspace,shape,raw,std::span{block}.first(block.size()-1),bytes)==Status::InvalidArgument);
+        CXET_CHECK(bytes==0 && block==blockBefore);
+        auto overlapping=reference;
+        overlapping.resize(std::max(raw.size(),reference.size()),0x5a);
+        const auto before=overlapping;
+        CXET_CHECK(decodeByteBlock(workspace,shape,std::span{overlapping}.first(reference.size()),
+            std::span{overlapping}.first(raw.size()),bytes)==Status::InvalidArgument);
+        CXET_CHECK(bytes==0 && overlapping==before);
+        overlapping=raw; overlapping.resize(block.size(),0x5a);
+        const auto encodeBefore=overlapping;
+        CXET_CHECK(encodeByteBlock(workspace,shape,std::span{overlapping}.first(raw.size()),overlapping,bytes)==Status::InvalidArgument);
+        CXET_CHECK(bytes==0 && overlapping==encodeBefore);
+        CXET_CHECK(encodeByteBlock(workspace,shape,raw,block,bytes)==Status::Ok);
+        CXET_CHECK(bytes==reference.size() && std::equal(reference.begin(),reference.end(),block.begin()));
+        // Decode follows failed calls without an explicit reset.
+        CXET_CHECK(decodeByteBlock(workspace,shape,reference,output,bytes)==Status::Ok);
+        CXET_CHECK(bytes==raw.size() && output==raw);
+        block=blockBefore; output=outputBefore;
+    }
+}
+void encodedFormatKnownSingleByteBlock() {
+    ByteBlockLayout shape{}; shape.recordBytes=1;
+    const std::vector<std::uint8_t> raw{0xa5};
+    // A one-byte unknown stream uses the unchanged plane transform. Arithmetic
+    // cannot improve its one-byte payload; this is the complete wire contract.
+    std::vector<std::uint8_t> expected(kByteBlockHeaderBytes+1);
+    putSmall(expected,0,4,0x31434248u);
+    putSmall(expected,4,2,1); putSmall(expected,6,2,1);
+    expected[8]=1;
+    putSmall(expected,10,2,1); putSmall(expected,12,4,1);
+    putSmall(expected,16,4,1); putSmall(expected,20,4,1); putSmall(expected,24,4,1);
+    putSmall(expected,28,4,format::crc32c(raw)); putSmall(expected,32,4,format::crc32c(raw));
+    std::vector<std::uint8_t> layoutBytes(32); layoutBytes[4]=1;
+    putSmall(expected,36,4,format::crc32c(layoutBytes));
+    expected.back()=raw.front(); repairHeader(expected);
+    ByteBlockWorkspace workspace; CXET_CHECK(workspace.prepare()==Status::Ok);
+    std::vector<std::uint8_t> actual(expected.size()); std::size_t bytes=999;
+    CXET_CHECK(encodeByteBlock(workspace,shape,raw,actual,bytes)==Status::Ok);
+    CXET_CHECK(bytes==expected.size() && actual==expected && encode(shape,raw)==expected);
+    std::vector<std::uint8_t> output(1);
+    CXET_CHECK(decodeByteBlock(workspace,shape,expected,output,bytes)==Status::Ok);
+    CXET_CHECK(bytes==raw.size() && output==raw);
+}
+void tradeQuantityRankingMatchesExistingOwner() {
+    namespace trades=codecs::trades_grouped_delta_qtydict::codec_detail;
+    namespace binary=codecs::byte_block;
+    const auto shape=layout(StreamType::Trades);
+    auto raw=fixture(shape,kByteBlockMaxRecords);
+    std::vector<trades::Trade> rows(kByteBlockMaxRecords);
+    for (std::size_t row=0;row<rows.size();++row) {
+        // More than 64 values, tied frequencies, negatives and full-range bits.
+        const auto quantity=(row%91)*0x9e3779b97f4a7c15ull;
+        put(raw,row*shape.recordBytes+shape.payloadOffset+8,quantity);
+        rows[row].qty=std::bit_cast<std::int64_t>(quantity);
+    }
+    trades::EncodedChunk dictionary{};
+    trades::buildHotQty(rows,0,rows.size(),dictionary,false);
+    std::vector<std::uint8_t> columns;
+    binary::encodeTrades(shape,raw,columns);
+    binary::Reader reader{columns}; std::uint64_t count{};
+    CXET_CHECK(reader.varint(count) && count==dictionary.hotQtyCount);
+    for (const auto quantity:dictionary.hotQty) {
+        std::uint64_t obtained{};
+        CXET_CHECK(reader.varint(obtained) && obtained==std::bit_cast<std::uint64_t>(quantity));
+    }
 }
 } // namespace byteblock_cases

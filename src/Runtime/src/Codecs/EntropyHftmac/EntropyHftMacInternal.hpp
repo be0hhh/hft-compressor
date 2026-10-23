@@ -86,10 +86,39 @@ bool validHeader(const Header& header) noexcept;
 // -log2(p(bit)).
 std::vector<std::uint8_t> arithmeticEncode(std::span<const std::uint8_t> input, EntropyKind kind);
 
+struct BitModel {
+    std::uint32_t zero{1};
+    std::uint32_t one{1};
+    std::uint32_t total() const noexcept { return zero+one; }
+    void update(bool bit,std::uint32_t maxTotal) noexcept {
+        if (bit) ++one;
+        else ++zero;
+        if (total()<=maxTotal) return;
+        zero=(zero+1u)>>1u; one=(one+1u)>>1u;
+        if (zero==0u) zero=1u;
+        if (one==0u) one=1u;
+    }
+};
+
+// Bounded models for every existing profile. The byte-block workspace owns
+// this storage on its prepared heap; no arithmetic call needs a large frame.
+struct ArithmeticWorkspace {
+    std::array<BitModel,4096> models{};
+    void reset(std::size_t contexts) noexcept {
+        std::fill_n(models.begin(),contexts,BitModel{});
+    }
+};
+
 // Cold byte blocks share the current arithmetic interval/model and exact
 // termination rules. A full encoded bound stops writing without growing it.
+bool arithmeticEncodeBounded(ArithmeticWorkspace& workspace,
+                             std::span<const std::uint8_t> input, EntropyKind kind,
+                             std::size_t limit, std::vector<std::uint8_t>& output);
 bool arithmeticEncodeBounded(std::span<const std::uint8_t> input, EntropyKind kind,
                              std::size_t limit, std::vector<std::uint8_t>& output);
+bool arithmeticDecodeBytes(ArithmeticWorkspace& workspace,
+                           std::span<const std::uint8_t> input, EntropyKind kind,
+                           std::span<std::uint8_t> output);
 bool arithmeticDecodeBytes(std::span<const std::uint8_t> input, EntropyKind kind,
                            std::span<std::uint8_t> output);
 

@@ -13,7 +13,7 @@
 
 // Exercise the actual CLI consumer without a subprocess or a test-only API.
 #define main compressorCliMain
-#include "../../src/Process/Main.cpp"
+#include "../../../src/Process/Main.cpp"
 #undef main
 
 namespace {
@@ -181,6 +181,10 @@ void corruptAndTruncatedBlocksNeverPublish();
 void boundsAndLayoutFailClosed();
 void repetitiveBlocksUseCompression();
 void extremeOpaqueBytesRespectWorstCaseBound();
+void workspaceReusePreservesBytesAcrossLayouts();
+void workspaceFailuresNeverPublishAndRecover();
+void encodedFormatKnownSingleByteBlock();
+void tradeQuantityRankingMatchesExistingOwner();
 }
 int main(int argc,char** argv) {
   const cxet::testing::Case cases[]{
@@ -190,6 +194,10 @@ int main(int argc,char** argv) {
     cxet::testing::Case{"compressor.byte_blocks_bounds_and_layout_fail_closed",byteblock_cases::boundsAndLayoutFailClosed},
     cxet::testing::Case{"compressor.byte_blocks_repetitive_records_use_compression",byteblock_cases::repetitiveBlocksUseCompression},
     cxet::testing::Case{"compressor.byte_blocks_extreme_opaque_bytes_respect_bound",byteblock_cases::extremeOpaqueBytesRespectWorstCaseBound},
+    cxet::testing::Case{"compressor.byte_blocks_workspace_reuse_preserves_bytes",byteblock_cases::workspaceReusePreservesBytesAcrossLayouts},
+    cxet::testing::Case{"compressor.byte_blocks_workspace_failure_is_atomic",byteblock_cases::workspaceFailuresNeverPublishAndRecover},
+    cxet::testing::Case{"compressor.byte_blocks_encoded_format_is_stable",byteblock_cases::encodedFormatKnownSingleByteBlock},
+    cxet::testing::Case{"compressor.byte_blocks_quantity_dictionary_matches_owner",byteblock_cases::tradeQuantityRankingMatchesExistingOwner},
     cxet::testing::Case{"compressor.zstd_roundtrip_is_byte_and_record_exact",zstdBytes},
     cxet::testing::Case{"compressor.grouped_trade_batches_preserve_integer_rows",groupedTrades},
     cxet::testing::Case{"compressor.bbo_delta_mask_preserves_integer_values",bboMask},

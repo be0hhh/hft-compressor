@@ -59,20 +59,19 @@ bool overlap(std::span<const std::uint8_t> input,std::span<std::uint8_t> output)
 }
 std::size_t transformBound(std::size_t rawBytes) noexcept { return rawBytes*3+1024; }
 
-std::vector<std::uint8_t> transform(const ByteBlockLayout& l,std::span<const std::uint8_t> input) {
-    std::vector<std::uint8_t> records(input.begin(),input.end());
-    std::vector<std::uint8_t> columns;
+void transform(const ByteBlockLayout& l,std::span<const std::uint8_t> input,
+               std::vector<std::uint8_t>& records,std::vector<std::uint8_t>& columns,
+               std::vector<std::uint8_t>& result) {
+    records.assign(input.begin(),input.end());
+    columns.clear(); result.clear();
     // At most 20 varint bytes per depth level, 64 dictionary words for
     // trades, and 41 bytes per BBO. Every source sequence is block-bounded.
-    columns.reserve(transformBound(input.size())-input.size());
     switch (l.streamType) {
     case StreamType::Trades: binary::encodeTrades(l,records,columns); break;
     case StreamType::BookTicker: binary::encodeBookTicker(l,records,columns); break;
     case StreamType::Depth: binary::encodeDepth(l,records,columns); break;
     case StreamType::Unknown: break;
     }
-    std::vector<std::uint8_t> result;
-    result.reserve(transformBound(input.size()));
     if (l.streamType!=StreamType::Unknown) {
         result.resize(4); binary::put(result,0,columns.size(),4);
         result.insert(result.end(),columns.begin(),columns.end());
@@ -87,7 +86,6 @@ std::vector<std::uint8_t> transform(const ByteBlockLayout& l,std::span<const std
             result.push_back(static_cast<std::uint8_t>(value-previous)); previous=value;
         }
     }
-    return result;
 }
 bool restore(const ByteBlockLayout& l,std::span<const std::uint8_t> base,std::span<std::uint8_t> records) {
     std::span<const std::uint8_t> columns;
@@ -118,26 +116,57 @@ bool restore(const ByteBlockLayout& l,std::span<const std::uint8_t> base,std::sp
 }
 }
 
+struct ByteBlockWorkspace::Scratch {
+    std::vector<std::uint8_t> raw;
+    std::vector<std::uint8_t> columns;
+    std::vector<std::uint8_t> base;
+    std::vector<std::uint8_t> arithmetic;
+    entropy::ArithmeticWorkspace entropyModels;
+    Scratch() {
+        constexpr auto maxRaw=kByteBlockMaxRecords*kByteBlockMaxRecordBytes;
+        raw.reserve(maxRaw);
+        columns.reserve(transformBound(maxRaw)-maxRaw);
+        base.reserve(transformBound(maxRaw));
+        arithmetic.reserve(maxRaw);
+    }
+};
+
+ByteBlockWorkspace::ByteBlockWorkspace() noexcept = default;
+ByteBlockWorkspace::~ByteBlockWorkspace() = default;
+Status ByteBlockWorkspace::prepare() noexcept {
+    if (scratch_) return Status::Ok;
+    try { scratch_=std::make_unique<Scratch>(); return Status::Ok; }
+    catch (...) { return Status::DecodeError; }
+}
+void ByteBlockWorkspace::reset() noexcept {
+    if (!scratch_) return;
+    scratch_->raw.clear(); scratch_->columns.clear();
+    scratch_->base.clear(); scratch_->arithmetic.clear();
+}
+
 std::size_t byteBlockEncodeBound(const ByteBlockLayout& layout,std::size_t count) noexcept {
     return valid(layout) && count>0 && count<=kByteBlockMaxRecords
         ? kByteBlockHeaderBytes+count*layout.recordBytes : 0;
 }
-Status encodeByteBlock(const ByteBlockLayout& l,std::span<const std::uint8_t> records,
+Status encodeByteBlock(ByteBlockWorkspace& workspace,const ByteBlockLayout& l,std::span<const std::uint8_t> records,
                       std::span<std::uint8_t> encoded,std::size_t& bytes) noexcept {
     bytes=0;
-    if (!valid(l) || records.empty() || records.size()%l.recordBytes || overlap(records,encoded))
+    if (!workspace.scratch_ || !valid(l) || records.empty() || records.size()%l.recordBytes || overlap(records,encoded))
         return Status::InvalidArgument;
     const auto count=records.size()/l.recordBytes;
     const auto bound=byteBlockEncodeBound(l,count);
     if (!bound || encoded.size()<bound || !validRecords(l,records)) return Status::InvalidArgument;
     try {
-        auto base=transform(l,records);
+        workspace.reset();
+        auto& scratch=*workspace.scratch_;
+        auto& base=scratch.base;
+        transform(l,records,scratch.raw,scratch.columns,base);
         if (base.size()>transformBound(records.size())) return Status::InvalidArgument;
         Storage storage=Storage::Opaque;
         auto payload=records;
         if (base.size()<=records.size()) { storage=Storage::Transform; payload=base; }
-        std::vector<std::uint8_t> arithmetic;
-        if (entropy::arithmeticEncodeBounded(base,entropy::EntropyKind::Ac16Ctx8,payload.size()-1,arithmetic)) {
+        auto& arithmetic=scratch.arithmetic;
+        if (entropy::arithmeticEncodeBounded(scratch.entropyModels,base,entropy::EntropyKind::Ac16Ctx8,payload.size()-1,arithmetic)) {
             storage=Storage::Arithmetic; payload=arithmetic;
         }
         std::array<std::uint8_t,kByteBlockHeaderBytes> header{};
@@ -154,10 +183,10 @@ Status encodeByteBlock(const ByteBlockLayout& l,std::span<const std::uint8_t> re
         bytes=kByteBlockHeaderBytes+payload.size(); return Status::Ok;
     } catch (...) { return Status::DecodeError; }
 }
-Status decodeByteBlock(const ByteBlockLayout& l,std::span<const std::uint8_t> encoded,
+Status decodeByteBlock(ByteBlockWorkspace& workspace,const ByteBlockLayout& l,std::span<const std::uint8_t> encoded,
                       std::span<std::uint8_t> records,std::size_t& bytes) noexcept {
     bytes=0;
-    if (!valid(l) || overlap(encoded,records)) return Status::InvalidArgument;
+    if (!workspace.scratch_ || !valid(l) || overlap(encoded,records)) return Status::InvalidArgument;
     if (encoded.size()<kByteBlockHeaderBytes) return Status::CorruptData;
     std::array<std::uint8_t,kByteBlockHeaderBytes> header{};
     std::copy_n(encoded.begin(),header.size(),header.begin());
@@ -182,17 +211,34 @@ Status decodeByteBlock(const ByteBlockLayout& l,std::span<const std::uint8_t> en
     const auto payload=encoded.subspan(kByteBlockHeaderBytes);
     if (format::crc32c(payload)!=binary::word(header,32,4)) return Status::CorruptData;
     try {
-        std::vector<std::uint8_t> raw(rawBytes);
+        workspace.reset();
+        auto& raw=workspace.scratch_->raw;
+        raw.resize(rawBytes);
         if (storage==Storage::Opaque) std::copy(payload.begin(),payload.end(),raw.begin());
         else {
-            std::vector<std::uint8_t> base(baseBytes);
+            auto& base=workspace.scratch_->base;
+            base.resize(baseBytes);
             if (storage==Storage::Arithmetic) {
-                if (!entropy::arithmeticDecodeBytes(payload,entropy::EntropyKind::Ac16Ctx8,base)) return Status::CorruptData;
+                if (!entropy::arithmeticDecodeBytes(workspace.scratch_->entropyModels,payload,entropy::EntropyKind::Ac16Ctx8,base)) return Status::CorruptData;
             } else std::copy(payload.begin(),payload.end(),base.begin());
             if (!restore(l,base,raw)) return Status::CorruptData;
         }
         if (!validRecords(l,raw) || format::crc32c(raw)!=binary::word(header,28,4)) return Status::CorruptData;
         std::copy(raw.begin(),raw.end(),records.begin()); bytes=rawBytes; return Status::Ok;
     } catch (...) { return Status::DecodeError; }
+}
+Status encodeByteBlock(const ByteBlockLayout& l,std::span<const std::uint8_t> records,
+                      std::span<std::uint8_t> encoded,std::size_t& bytes) noexcept {
+    bytes=0;
+    ByteBlockWorkspace workspace;
+    const auto status=workspace.prepare();
+    return isOk(status) ? encodeByteBlock(workspace,l,records,encoded,bytes) : status;
+}
+Status decodeByteBlock(const ByteBlockLayout& l,std::span<const std::uint8_t> encoded,
+                      std::span<std::uint8_t> records,std::size_t& bytes) noexcept {
+    bytes=0;
+    ByteBlockWorkspace workspace;
+    const auto status=workspace.prepare();
+    return isOk(status) ? decodeByteBlock(workspace,l,encoded,records,bytes) : status;
 }
 } // namespace hft_compressor

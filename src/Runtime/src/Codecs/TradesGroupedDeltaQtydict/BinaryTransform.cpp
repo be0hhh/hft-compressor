@@ -1,6 +1,10 @@
 #include "TradesGroupedDeltaQtyDictInternal.hpp"
 #include "../ByteBlock/BinaryTransform.hpp"
 
+#include <algorithm>
+#include <array>
+#include <utility>
+
 namespace hft_compressor::codecs::byte_block {
 namespace trades = trades_grouped_delta_qtydict::codec_detail;
 
@@ -11,19 +15,31 @@ void varint(std::vector<std::uint8_t>& bytes, std::uint64_t value) {
 void encodeTrades(const ByteBlockLayout& layout, std::span<std::uint8_t> records,
                   std::vector<std::uint8_t>& columns) {
     const auto count=records.size()/layout.recordBytes;
-    std::vector<trades::Trade> rows; rows.reserve(count);
+    std::array<trades::Trade,kByteBlockMaxRecords> rows{};
     for (std::size_t i=0;i<count;++i) {
         const auto offset=i*layout.recordBytes+layout.payloadOffset;
-        rows.push_back({std::bit_cast<std::int64_t>(word(records,offset)),
+        rows[i]={std::bit_cast<std::int64_t>(word(records,offset)),
                         std::bit_cast<std::int64_t>(word(records,offset+8)),
                         records[offset+16],
-                        std::bit_cast<std::int64_t>(word(records,i*layout.recordBytes+layout.timestampOffset))});
+                        std::bit_cast<std::int64_t>(word(records,i*layout.recordBytes+layout.timestampOffset))};
     }
-    // Reuse the channel owner's frequency-ranked 64-entry quantity dictionary.
-    trades::EncodedChunk dictionary{};
-    trades::buildHotQty(rows,0,count,dictionary,false);
-    varint(columns,dictionary.hotQtyCount);
-    for (auto qty:dictionary.hotQty) varint(columns,std::bit_cast<std::uint64_t>(qty));
+    // Same channel-owned frequency ranking and signed-value tie break as
+    // buildHotQty(false), with a fixed array for the 256-record byte block.
+    std::array<std::pair<std::int64_t,std::uint32_t>,kByteBlockMaxRecords> quantities{};
+    std::size_t unique{};
+    for (std::size_t i=0;i<count;++i) {
+        std::size_t index{};
+        while (index<unique && quantities[index].first!=rows[i].qty) ++index;
+        if (index==unique) quantities[unique++]={rows[i].qty,0};
+        ++quantities[index].second;
+    }
+    std::sort(quantities.begin(),quantities.begin()+unique,[](const auto& a,const auto& b) {
+        return a.second!=b.second ? a.second>b.second : a.first<b.first;
+    });
+    const auto hotCount=std::min<std::size_t>(unique,trades::kHotQtyCount);
+    varint(columns,hotCount);
+    for (std::size_t i=0;i<hotCount;++i)
+        varint(columns,std::bit_cast<std::uint64_t>(quantities[i].first));
     std::uint64_t previousPrice{};
     for (std::size_t start=0;start<count;) {
         auto end=start+1;
@@ -33,9 +49,11 @@ void encodeTrades(const ByteBlockLayout& layout, std::span<std::uint8_t> records
         const auto price=std::bit_cast<std::uint64_t>(rows[start].price);
         varint(columns,zigzagBits(price-previousPrice)); previousPrice=price;
         for (auto row=start;row<end;++row) {
-            const auto code=trades::qtyCode(dictionary,rows[row].qty);
+            std::size_t code{};
+            while (code<hotCount && quantities[code].first!=rows[row].qty) ++code;
+            if (code==hotCount) code=trades::kHotQtyCount;
             varint(columns,code);
-            if (code==dictionary.hotQtyCapacity)
+            if (code==trades::kHotQtyCount)
                 varint(columns,std::bit_cast<std::uint64_t>(rows[row].qty));
             const auto offset=row*layout.recordBytes+layout.payloadOffset;
             put(records,offset,0); put(records,offset+8,0);

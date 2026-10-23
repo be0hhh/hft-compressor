@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 
 #include "hft_compressor/Api.hpp"
@@ -38,9 +39,38 @@ struct ByteBlockLayout {
 HFT_COMPRESSOR_API std::size_t byteBlockEncodeBound(
     const ByteBlockLayout& layout, std::size_t recordCount) noexcept;
 
+// Caller-owned cold scratch, reused across any valid layout and block count.
+// prepare() allocates once at the fixed maximum block ceiling; repeated calls
+// retain that storage. reset() discards transient block state, not capacity.
+// Unprepared workspaces refuse encode/decode. One owner, no concurrent calls.
+class HFT_COMPRESSOR_API ByteBlockWorkspace {
+public:
+    ByteBlockWorkspace() noexcept;
+    ~ByteBlockWorkspace();
+    ByteBlockWorkspace(const ByteBlockWorkspace&) = delete;
+    ByteBlockWorkspace& operator=(const ByteBlockWorkspace&) = delete;
+    Status prepare() noexcept;
+    void reset() noexcept;
+
+private:
+    struct Scratch;
+    std::unique_ptr<Scratch> scratch_;
+    friend Status encodeByteBlock(ByteBlockWorkspace&, const ByteBlockLayout&,
+        std::span<const std::uint8_t>, std::span<std::uint8_t>, std::size_t&) noexcept;
+    friend Status decodeByteBlock(ByteBlockWorkspace&, const ByteBlockLayout&,
+        std::span<const std::uint8_t>, std::span<std::uint8_t>, std::size_t&) noexcept;
+};
+
 // No output is published on failure (including overlapping input/output).
 // All bytes, padding, clocks and input order round-trip exactly. State resets
-// at each call. Cold scratch allocations have a fixed block-size ceiling.
+// at each call. Prepared workspace overloads perform no scratch allocation;
+// convenience overloads prepare private scratch with the same fixed ceiling.
+HFT_COMPRESSOR_API Status encodeByteBlock(ByteBlockWorkspace& workspace,
+    const ByteBlockLayout& layout, std::span<const std::uint8_t> records,
+    std::span<std::uint8_t> encoded, std::size_t& encodedBytes) noexcept;
+HFT_COMPRESSOR_API Status decodeByteBlock(ByteBlockWorkspace& workspace,
+    const ByteBlockLayout& layout, std::span<const std::uint8_t> encoded,
+    std::span<std::uint8_t> records, std::size_t& recordBytes) noexcept;
 HFT_COMPRESSOR_API Status encodeByteBlock(const ByteBlockLayout& layout,
     std::span<const std::uint8_t> records, std::span<std::uint8_t> encoded,
     std::size_t& encodedBytes) noexcept;

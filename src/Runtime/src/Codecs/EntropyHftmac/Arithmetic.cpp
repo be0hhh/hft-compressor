@@ -23,7 +23,7 @@ namespace hft_compressor::codecs::entropy_hftmac::detail {
 namespace {
 
 struct BitWriter {
-    std::vector<std::uint8_t> bytes{};
+    std::vector<std::uint8_t>& bytes;
     std::uint8_t current{0};
     std::uint8_t bitCount{0};
     std::size_t limit{std::numeric_limits<std::size_t>::max()};
@@ -48,23 +48,6 @@ struct BitWriter {
         bytes.push_back(current);
         current = 0;
         bitCount = 0;
-    }
-};
-
-struct BitModel {
-    std::uint32_t zero{1};
-    std::uint32_t one{1};
-
-    std::uint32_t total() const noexcept { return zero + one; }
-
-    void update(bool bit, std::uint32_t maxTotal) noexcept {
-        if (bit) ++one;
-        else ++zero;
-        if (total() <= maxTotal) return;
-        zero = (zero + 1u) >> 1u;
-        one = (one + 1u) >> 1u;
-        if (zero == 0u) zero = 1u;
-        if (one == 0u) one = 1u;
     }
 };
 
@@ -121,9 +104,18 @@ std::vector<std::uint8_t> arithmeticEncode(std::span<const std::uint8_t> input, 
 
 bool arithmeticEncodeBounded(std::span<const std::uint8_t> input, EntropyKind kind,
                              std::size_t limit, std::vector<std::uint8_t>& output) {
+    auto workspace=std::make_unique<ArithmeticWorkspace>();
+    return arithmeticEncodeBounded(*workspace,input,kind,limit,output);
+}
+
+bool arithmeticEncodeBounded(ArithmeticWorkspace& workspace,
+                             std::span<const std::uint8_t> input, EntropyKind kind,
+                             std::size_t limit, std::vector<std::uint8_t>& output) {
     const ArithmeticProfile profile = profileFor(kind);
-    std::vector<BitModel> models(profile.contextCount);
-    BitWriter out;
+    workspace.reset(profile.contextCount);
+    auto& models=workspace.models;
+    output.clear();
+    BitWriter out{output};
     out.limit = limit;
     if (limit != std::numeric_limits<std::size_t>::max()) out.bytes.reserve(limit);
     std::uint32_t low = 0;
@@ -166,7 +158,6 @@ bool arithmeticEncodeBounded(std::span<const std::uint8_t> input, EntropyKind ki
     emitBitPlusPending(out, low >= kFirstQuarter, pending);
     out.finish();
     if (!out.good) { output.clear(); return false; }
-    output = std::move(out.bytes);
     return true;
 }
 
@@ -178,9 +169,12 @@ namespace {
 // valid prefix or a false decoded-size declaration without storing output.
 class ArithmeticCursor final : public internal::DecodeCursor {
     ArithmeticProfile profile_;
-    std::array<BitModel, 4096> models_{};
+    std::unique_ptr<ArithmeticWorkspace> ownedModels_;
+    std::span<BitModel> models_;
     std::unique_ptr<internal::DecodeCursor> input_;
     std::unique_ptr<internal::DecodeCursor> comparison_;
+    internal::DecodeCursor* inputCursor_{};
+    internal::DecodeCursor* comparisonCursor_{};
     std::uint64_t remaining_{};
     std::uint32_t low_{}, high_{kTopValue}, code_{};
     std::uint64_t pending_{};
@@ -190,24 +184,24 @@ class ArithmeticCursor final : public internal::DecodeCursor {
 
     bool bit() {
         if (bitPos_ == 8u) {
-            if (input_->remaining() == 0u) {
+            if (inputCursor_->remaining() == 0u) {
                 // The existing encoder emits the final interval plus <=7 byte
                 // padding bits. A 32-bit lookahead needs at most 30 more zero
                 // bits. Exact encoder comparison below proves termination.
                 if (++virtualBits_ > 30u) good_ = false;
                 return false;
             }
-            if (!input_->byte(current_)) { good_ = false; return false; }
+            if (!inputCursor_->byte(current_)) { good_ = false; return false; }
             bitPos_ = 0;
         }
         return ((current_ >> (7u - bitPos_++)) & 1u) != 0u;
     }
     void emit(bool value) {
-        if (!comparison_) return;
+        if (!comparisonCursor_) return;
         emitted_ = static_cast<std::uint8_t>((emitted_ << 1u) | value);
         if (++emittedBits_ == 8u) {
             std::uint8_t expected{};
-            if (!comparison_->byte(expected) || expected != emitted_) good_ = false;
+            if (!comparisonCursor_->byte(expected) || expected != emitted_) good_ = false;
             emitted_ = 0; emittedBits_ = 0;
         }
     }
@@ -221,9 +215,20 @@ public:
                            static_cast<EntropyKind>(header.entropy), verify) {}
     ArithmeticCursor(const internal::DecodeSource& encoded, std::size_t offset,
                      std::size_t bytes, std::size_t decodedBytes, EntropyKind kind, bool verify)
-        : profile_(profileFor(kind)), input_(encoded.cursor(offset, bytes)),
-          comparison_(verify ? encoded.cursor(offset, bytes) : nullptr), remaining_(decodedBytes) {
+        : profile_(profileFor(kind)), ownedModels_(std::make_unique<ArithmeticWorkspace>()),
+          models_(ownedModels_->models), input_(encoded.cursor(offset, bytes)),
+          comparison_(verify ? encoded.cursor(offset, bytes) : nullptr),
+          inputCursor_(input_.get()), comparisonCursor_(comparison_.get()), remaining_(decodedBytes) {
         if (!input_ || (verify && !comparison_)) { good_ = false; return; }
+        for (unsigned i = 0; i < 32u; ++i) code_ = (code_ << 1u) | bit();
+    }
+    ArithmeticCursor(ArithmeticWorkspace& workspace,
+                     internal::DecodeCursor& input, internal::DecodeCursor& comparison,
+                     std::size_t decodedBytes, EntropyKind kind)
+        : profile_(profileFor(kind)), models_(workspace.models),
+          inputCursor_(&input), comparisonCursor_(&comparison),
+          remaining_(decodedBytes) {
+        workspace.reset(profile_.contextCount);
         for (unsigned i = 0; i < 32u; ++i) code_ = (code_ << 1u) | bit();
     }
     std::uint64_t remaining() const noexcept override { return remaining_; }
@@ -257,13 +262,13 @@ public:
         --remaining_; previous_ = value; out = value; return good_;
     }
     bool finish() {
-        if (!good_ || remaining_ != 0u || !comparison_) return false;
+        if (!good_ || remaining_ != 0u || !comparisonCursor_) return false;
         if (pending_ == std::numeric_limits<std::uint64_t>::max()) return false;
         ++pending_; emitPending(low_ >= kFirstQuarter);
         if (emittedBits_ != 0u) {
             while (emittedBits_ != 0u) emit(false);
         }
-        return good_ && comparison_->remaining() == 0u && input_->remaining() == 0u;
+        return good_ && comparisonCursor_->remaining() == 0u && inputCursor_->remaining() == 0u;
     }
 };
 
@@ -271,9 +276,25 @@ public:
 
 bool arithmeticDecodeBytes(std::span<const std::uint8_t> input, EntropyKind kind,
                            std::span<std::uint8_t> output) {
-    internal::SpanDecodeSource source(input);
-    auto decoded = std::make_unique<ArithmeticCursor>(source, 0, input.size(), output.size(), kind, true);
-    return decoded->read(output) && decoded->finish();
+    auto workspace=std::make_unique<ArithmeticWorkspace>();
+    return arithmeticDecodeBytes(*workspace,input,kind,output);
+}
+
+bool arithmeticDecodeBytes(ArithmeticWorkspace& workspace,
+                           std::span<const std::uint8_t> input, EntropyKind kind,
+                           std::span<std::uint8_t> output) {
+    class SpanCursor final : public internal::DecodeCursor {
+        std::span<const std::uint8_t> bytes_;
+    public:
+        explicit SpanCursor(std::span<const std::uint8_t> bytes) : bytes_(bytes) {}
+        bool byte(std::uint8_t& out) override {
+            if (bytes_.empty()) return false;
+            out=bytes_.front(); bytes_=bytes_.subspan(1); return true;
+        }
+        std::uint64_t remaining() const noexcept override { return bytes_.size(); }
+    } source(input), comparison(input);
+    ArithmeticCursor decoded(workspace,source,comparison,output.size(),kind);
+    return decoded.read(output) && decoded.finish();
 }
 
 std::unique_ptr<internal::DecodeCursor> arithmeticCursor(const internal::DecodeSource& encoded, const Header& header) {

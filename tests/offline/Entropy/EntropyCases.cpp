@@ -1,6 +1,6 @@
 #include "OfflineCase.hpp"
 #include "hft_compressor/Compressor.hpp"
-#include "../../src/Runtime/src/Codecs/EntropyHftmac/EntropyHftMacInternal.hpp"
+#include "../../../src/Runtime/src/Codecs/EntropyHftmac/EntropyHftMacInternal.hpp"
 
 #include <algorithm>
 #include <array>
