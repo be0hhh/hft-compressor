@@ -124,7 +124,7 @@ void overflowingContainerSizesRefuseHeader() {
   header.entropy = 1;
   header.base = 1;
   header.stream = 1;
-  header.baseBytes = 96;
+  header.baseBytes = 94;
   header.payloadBytes = std::numeric_limits<std::uint64_t>::max();
   header.outputBytes = detail::kHeaderBytes - 1;
   header.headerCrc32c = detail::headerCrc32c(header);
@@ -133,7 +133,7 @@ void overflowingContainerSizesRefuseHeader() {
 
 void truncationAndCorruptPayloadNeverPublish() {
   Fixture fixture;
-  auto bytes = fixture.encoded("trades.jsonl", kTrades, "hftmac.trades_grouped_delta_qtydict_ac16_ctx0_v1");
+  auto bytes = fixture.encoded("trades.jsonl", kTrades, "hftmac.trades_grouped_delta_qtydict_ac16_ctx0");
   std::size_t callbacks = 0;
   auto callback = [&](auto) { ++callbacks; return true; };
   auto truncated = bytes;
@@ -149,16 +149,16 @@ void truncationAndCorruptPayloadNeverPublish() {
   CXET_CHECK(entropy::decode(bytes, callback) == Status::CorruptData);
   // The entropy CRCs are correct; the native batch itself declares more levels
   // than its consumed columns contain. It must refuse before any batch reserve.
-  auto base = fixture.encoded("depth.jsonl", kDepth, "hftmac.depth_ladder_offset_v3");
-  const auto batchStart = 176u + static_cast<std::size_t>(readLe(base, 76, 4));
+  auto base = fixture.encoded("depth.jsonl", kDepth, "hftmac.depth_ladder_offset");
+  const auto batchStart = 174u + static_cast<std::size_t>(readLe(base, 74, 4));
   CXET_CHECK(base.at(batchStart) == 0u && base.at(batchStart + 1u) == 2u);
-  const auto batchBytes = readLe(base, 80, 4);
+  const auto batchBytes = readLe(base, 78, 4);
   base.erase(base.begin() + batchStart + 1u);
   std::array<std::uint8_t, 10> impossibleCount{};
   impossibleCount.fill(0xffu); impossibleCount.back() = 1u;
   base.insert(base.begin() + batchStart + 1u, impossibleCount.begin(), impossibleCount.end());
-  writeLe(base, 80, 4, batchBytes + 9u);
-  writeLe(base, 16, 8, base.size());
+  writeLe(base, 78, 4, batchBytes + 9u);
+  writeLe(base, 14, 8, base.size());
   const auto malformed = wrapDepth(base);
   CXET_CHECK(entropy::decode(malformed, callback) == Status::CorruptData);
   CXET_CHECK(codecs::depth_ladder_offset::decode(base, callback) == Status::CorruptData);
@@ -167,7 +167,7 @@ void truncationAndCorruptPayloadNeverPublish() {
 
 void decodedCrcAndTerminationPrecedePublication() {
   Fixture fixture;
-  auto bytes = fixture.encoded("trades.jsonl", kTrades, "hftmac.trades_grouped_delta_qtydict_ac16_ctx0_v1");
+  auto bytes = fixture.encoded("trades.jsonl", kTrades, "hftmac.trades_grouped_delta_qtydict_ac16_ctx0");
   detail::Header header{};
   CXET_CHECK(detail::parseHeader(bytes.data(), bytes.size(), header));
   header.decodedCrc32c ^= 1;
@@ -181,7 +181,7 @@ void decodedCrcAndTerminationPrecedePublication() {
   CXET_CHECK(entropy::decode(bytes, [&](auto) { ++callbacks; return true; }) == Status::CorruptData);
   CXET_CHECK(callbacks == 0);
   // An extra CRC-valid zero byte is not a complete canonical stream.
-  bytes = fixture.encoded("trades.jsonl", kTrades, "hftmac.trades_grouped_delta_qtydict_ac16_ctx0_v1");
+  bytes = fixture.encoded("trades.jsonl", kTrades, "hftmac.trades_grouped_delta_qtydict_ac16_ctx0");
   CXET_CHECK(detail::parseHeader(bytes.data(), bytes.size(), header));
   bytes.push_back(0);
   ++header.payloadBytes; ++header.outputBytes;
@@ -193,7 +193,7 @@ void decodedCrcAndTerminationPrecedePublication() {
 
 void callbackStopAndThrowReturnStatus() {
   Fixture fixture;
-  const auto bytes = fixture.encoded("trades.jsonl", kTrades, "hftmac.trades_grouped_delta_qtydict_ac16_ctx0_v1");
+  const auto bytes = fixture.encoded("trades.jsonl", kTrades, "hftmac.trades_grouped_delta_qtydict_ac16_ctx0");
   std::size_t callbacks = 0;
   CXET_CHECK(entropy::decode(bytes, [&](auto) { ++callbacks; return false; }) == Status::CallbackStopped);
   CXET_CHECK(callbacks == 1);
@@ -225,9 +225,9 @@ void callbackStopAndThrowReturnStatus() {
   struct Native { const char* file; const char* rows; const char* pipeline;
     Status (*decode)(const std::filesystem::path&, const DecodedBlockCallback&) noexcept; };
   const Native natives[]{
-    {"trades.jsonl",kTrades,"hftmac.trades_grouped_delta_qtydict_math_v3",codecs::trades_grouped_delta_qtydict::decodeFile},
-    {"bookticker.jsonl",kBbo,"hftmac.bookticker_delta_mask_v2",codecs::bookticker_delta_mask::decodeFile},
-    {"depth.jsonl",kDepth,"hftmac.depth_ladder_offset_v3",codecs::depth_ladder_offset::decodeFile},
+    {"trades.jsonl",kTrades,"hftmac.trades_grouped_delta_qtydict_math",codecs::trades_grouped_delta_qtydict::decodeFile},
+    {"bookticker.jsonl",kBbo,"hftmac.bookticker_delta_mask",codecs::bookticker_delta_mask::decodeFile},
+    {"depth.jsonl",kDepth,"hftmac.depth_ladder_offset",codecs::depth_ladder_offset::decodeFile},
   };
   for (const auto& native : natives) {
     const auto input = fixture.encoded(native.file,native.rows,native.pipeline);
@@ -242,7 +242,7 @@ void largeTradesCrossBlocksWithoutWholeFileOutput() {
   std::string input;
   for (std::uint64_t i = 0; i < 33000; ++i)
     input += "[" + std::to_string(100000001 + i) + ",200000003,0," + std::to_string(1000000000 + i) + "]\n";
-  const auto bytes = fixture.encoded("trades.jsonl", input, "hftmac.trades_grouped_delta_qtydict_ac16_ctx8_v1");
+  const auto bytes = fixture.encoded("trades.jsonl", input, "hftmac.trades_grouped_delta_qtydict_ac16_ctx8");
   std::string decoded;
   std::size_t callbacks = 0;
   CXET_CHECK(entropy::decode(bytes, [&](auto block) {
@@ -264,7 +264,7 @@ void currentEntropyVariantsPreserveAllBaseCodecs() {
     {"depth.jsonl", kDepth, "hftmac.depth_ladder_offset_"},
   };
   for (const auto& base : bases) for (const char* suffix : suffixes) {
-    const auto bytes = fixture.encoded(base.file, base.rows, std::string(base.prefix) + suffix + "_v1");
+    const auto bytes = fixture.encoded(base.file, base.rows, std::string(base.prefix) + suffix + "");
     std::string decoded;
     CXET_CHECK(entropy::decode(bytes, [&](auto block) {
       decoded.append(reinterpret_cast<const char*>(block.data()), block.size()); return true;
@@ -287,10 +287,10 @@ void actualDecoderAndDepthBookAllocationFailuresReturnStatus() {
     CompressionResult (*run)(const CompressionRequest&, const PipelineDescriptor&) noexcept;
   };
   const Encoder encoders[]{
-    {"trades.jsonl", kTrades, "hftmac.trades_grouped_delta_qtydict_math_v3", &codecs::trades_grouped_delta_qtydict::compress},
-    {"bookticker.jsonl", kBbo, "hftmac.bookticker_delta_mask_v2", &codecs::bookticker_delta_mask::compress},
-    {"depth.jsonl", kDepth, "hftmac.depth_ladder_offset_v3", &codecs::depth_ladder_offset::compress},
-    {"depth.jsonl", kDepth, "hftmac.depth_ladder_offset_ac16_ctx0_v1", &entropy::compress},
+    {"trades.jsonl", kTrades, "hftmac.trades_grouped_delta_qtydict_math", &codecs::trades_grouped_delta_qtydict::compress},
+    {"bookticker.jsonl", kBbo, "hftmac.bookticker_delta_mask", &codecs::bookticker_delta_mask::compress},
+    {"depth.jsonl", kDepth, "hftmac.depth_ladder_offset", &codecs::depth_ladder_offset::compress},
+    {"depth.jsonl", kDepth, "hftmac.depth_ladder_offset_ac16_ctx0", &entropy::compress},
   };
   for (const auto& encoder : encoders) {
     CompressionRequest request{};
@@ -304,13 +304,13 @@ void actualDecoderAndDepthBookAllocationFailuresReturnStatus() {
     CXET_CHECK(result.status == Status::DecodeError && !result.roundtripOk);
     CXET_CHECK(!std::filesystem::exists(request.outputPathOverride));
   }
-  const auto encoded = fixture.encoded("depth.jsonl", kDepth, "hftmac.depth_ladder_offset_ac16_ctx0_v1");
+  const auto encoded = fixture.encoded("depth.jsonl", kDepth, "hftmac.depth_ladder_offset_ac16_ctx0");
   std::size_t callbacks = 0;
   const DecodedBlockCallback accept = [&](auto) { ++callbacks; return true; };
   Status status{};
   { allocation_probe::Scope failure(1); status = entropy::decode(encoded, accept); }
   CXET_CHECK(status == Status::DecodeError && callbacks == 0);
-  const auto base = fixture.encoded("depth.jsonl", kDepth, "hftmac.depth_ladder_offset_v3");
+  const auto base = fixture.encoded("depth.jsonl", kDepth, "hftmac.depth_ladder_offset");
   std::size_t allocations{};
   { allocation_probe::Scope counting(0);
     status = codecs::depth_ladder_offset::decode(base, accept);

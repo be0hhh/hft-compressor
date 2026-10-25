@@ -51,14 +51,14 @@ struct Fixture {
   }
 };
 void zstdBytes() {
-  Fixture f("trades.jsonl",trades,"std.zstd_jsonl_blocks_v1");
+  Fixture f("trades.jsonl",trades,"std.zstd_jsonl_blocks");
   DecodeVerifyRequest request{}; request.compressedPath=f.result.outputPath;request.canonicalPath=f.input;
   request.pipelineId=f.result.pipelineId;request.verifyMode=VerifyMode::Both;
   auto v=decodeAndVerify(request);
   CXET_CHECK(v.status==Status::Ok && v.verified && v.byteExact && v.recordExact && v.mismatchBytes==0);
 }
 void groupedTrades() {
-  Fixture f("trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math_v3");f.verifyRecords(3);
+  Fixture f("trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math");f.verifyRecords(3);
   std::uint64_t count=0;
   CXET_CHECK(decodeReplayArtifactRecordBatches(f.artifact(),1,[&](const ReplayRecordBatch& b){
     CXET_CHECK(b.trades.size()==1 && b.trades[0].tsNs==1000000000+static_cast<std::int64_t>(count));
@@ -67,18 +67,18 @@ void groupedTrades() {
 }
 void bboMask() {
   Fixture f("bookticker.jsonl","[100000001,200000003,100000011,400000005,1000000000]\n[100000002,200000003,100000012,400000006,1000000001]\n",
-      "hftmac.bookticker_delta_mask_v2");f.verifyRecords(2);
+      "hftmac.bookticker_delta_mask");f.verifyRecords(2);
 }
 void depthLadder() {
   Fixture f("depth.jsonl","[[100000001,200000003,0],[100000011,400000005,1],1000000000]\n[[100000001,0,0],[100000012,400000006,1],1000000001]\n",
-      "hftmac.depth_ladder_offset_v3");f.verifyRecords(2);
+      "hftmac.depth_ladder_offset");f.verifyRecords(2);
 }
 std::vector<std::uint8_t> bytes(const std::filesystem::path& path) {
   std::ifstream in(path,std::ios::binary);CXET_CHECK(in.good());
   return {std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>()};
 }
 void corruptCrc() {
-  Fixture f("trades.jsonl",trades,"std.zstd_jsonl_blocks_v1");auto data=bytes(f.result.outputPath);
+  Fixture f("trades.jsonl",trades,"std.zstd_jsonl_blocks");auto data=bytes(f.result.outputPath);
   std::size_t originalBytes=0;
   CXET_CHECK(decodeHfcBuffer(data,[&](auto block){originalBytes+=block.size();return true;})==Status::Ok);
   CXET_CHECK(originalBytes==std::string(trades).size());
@@ -87,19 +87,19 @@ void corruptCrc() {
   CXET_CHECK(delivered==0);
 }
 void truncatedBlock() {
-  Fixture f("trades.jsonl",trades,"std.zstd_jsonl_blocks_v1");auto data=bytes(f.result.outputPath);
+  Fixture f("trades.jsonl",trades,"std.zstd_jsonl_blocks");auto data=bytes(f.result.outputPath);
   CXET_CHECK(data.size()>32);data.resize(data.size()-7);
   CXET_CHECK(decodeHfcBuffer(data,[](auto){return true;})!=Status::Ok);
 }
 void unsupportedPipeline() {
-  Fixture f("trades.jsonl",trades,"std.raw_jsonl_blocks_v1");
+  Fixture f("trades.jsonl",trades,"std.raw_jsonl_blocks");
   CompressionRequest r{};r.inputPath=f.input;r.outputRoot=f.root/"refused";r.pipelineId="unknown-pipeline";
   CXET_CHECK(compress(r).status==Status::UnsupportedPipeline);
-  r.pipelineId="hftmac.bookticker_delta_mask_v2";
+  r.pipelineId="hftmac.bookticker_delta_mask";
   CXET_CHECK(compress(r).status==Status::UnsupportedStream);
 }
 void callbackBoundaries() {
-  Fixture f("trades.jsonl",trades,"std.raw_jsonl_blocks_v1");std::uint64_t count=0;
+  Fixture f("trades.jsonl",trades,"std.raw_jsonl_blocks");std::uint64_t count=0;
   CXET_CHECK(decodeReplayArtifactRecordBatches(f.artifact(),2,[&](const ReplayRecordBatch& b){
     CXET_CHECK(b.recordCount()<=2 && b.firstLineNumber==count+1);count+=b.recordCount();return true;
   })==Status::Ok && count==3);
@@ -108,7 +108,7 @@ void callbackBoundaries() {
   CXET_CHECK(callbacks==1);
 }
 void callbackExceptionsRefuseRecordAdmission() {
-  Fixture f("trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math_v3");
+  Fixture f("trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math");
   CXET_CHECK(decodeReplayArtifactRecordBatches(f.artifact(),1,[](const auto&) -> bool {
     throw std::runtime_error("consumer rejected row");
   })==Status::DecodeError);
@@ -125,7 +125,7 @@ void callbackExceptionsRefuseRecordAdmission() {
   })==Status::CorruptData);
 }
 void failedRoundtripCannotPublishOrOverwriteArtifact() {
-  Fixture f("trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math_v3");
+  Fixture f("trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math");
   // Valid native input grammar, deliberately not byte-canonical: the real
   // encoder writes output, then its roundtrip consumer refuses admission.
   { std::ofstream out(f.input,std::ios::binary|std::ios::trunc);
@@ -143,7 +143,7 @@ void failedRoundtripCannotPublishOrOverwriteArtifact() {
     CXET_CHECK(entry.path().filename().string().find(".partial.")==std::string::npos);
 }
 void cliWriteFailureCannotReportInspectSuccess() {
-  Fixture f("trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math_v3");
+  Fixture f("trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math");
   struct StdoutGuard {
     std::FILE* previous{stdout};
     std::FILE* replacement{};
@@ -161,9 +161,9 @@ void cliWriteFailureCannotReportInspectSuccess() {
 void nativeDiagnosticCallbackExceptionsReturnStatus() {
   struct Input { const char* file; const char* rows; const char* pipeline; };
   const Input inputs[]{
-    {"trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math_v3"},
-    {"bookticker.jsonl","[100000001,200000003,100000011,400000005,1000000000]\n","hftmac.bookticker_delta_mask_v2"},
-    {"depth.jsonl","[[100000001,200000003,0],[100000011,400000005,1],1000000000]\n","hftmac.depth_ladder_offset_v3"},
+    {"trades.jsonl",trades,"hftmac.trades_grouped_delta_qtydict_math"},
+    {"bookticker.jsonl","[100000001,200000003,100000011,400000005,1000000000]\n","hftmac.bookticker_delta_mask"},
+    {"depth.jsonl","[[100000001,200000003,0],[100000011,400000005,1],1000000000]\n","hftmac.depth_ladder_offset"},
   };
   for (const auto& input:inputs) {
     Fixture f(input.file,input.rows,input.pipeline);

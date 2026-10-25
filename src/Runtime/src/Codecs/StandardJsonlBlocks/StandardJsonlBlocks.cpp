@@ -21,7 +21,6 @@ bool codecAvailable(const CodecSpec& spec) noexcept {
 
 bool validHeader(const format::FileHeader& fileHeader, const CodecSpec& spec) noexcept {
     return fileHeader.magic == format::kFileMagic
-        && fileHeader.version == format::kVersion
         && fileHeader.codec == spec.codec
         && fileHeader.blockBytes != 0u
         && format::streamFromWire(fileHeader.stream) != StreamType::Unknown;
@@ -229,7 +228,6 @@ CompressionResult compress(const CompressionRequest& request,
     }
 
     format::FileHeader fileHeader{};
-    fileHeader.version = format::kVersion;
     fileHeader.codec = spec.codec;
     fileHeader.stream = format::streamToWire(streamType);
     fileHeader.blockBytes = blockBytes;
@@ -367,7 +365,6 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path,
     info.transform = std::string{pipeline.transform};
     info.entropy = std::string{pipeline.entropy};
     info.streamType = format::streamFromWire(header.stream);
-    info.version = header.version;
     info.inputBytes = header.inputBytes;
     info.outputBytes = header.outputBytes;
     info.lineCount = header.lineCount;

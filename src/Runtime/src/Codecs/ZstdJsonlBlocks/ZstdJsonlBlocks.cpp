@@ -22,7 +22,6 @@ namespace {
 
 bool validHeader(const format::FileHeader& fileHeader) noexcept {
     return fileHeader.magic == format::kFileMagic
-        && format::isSupportedVersion(fileHeader.version)
         && fileHeader.codec == format::kCodecZstdJsonlBlocks
         && fileHeader.blockBytes != 0u;
 }
@@ -219,7 +218,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     }
 
     format::FileHeader fileHeader{};
-    fileHeader.version = format::kVersion;
     fileHeader.stream = format::streamToWire(streamType);
     fileHeader.blockBytes = blockBytes;
     fileHeader.inputBytes = result.inputBytes;
@@ -310,12 +308,11 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const Pipe
     info.status = Status::Ok;
     info.found = true;
     info.path = path;
-    info.formatId = "hfc.zstd_jsonl_blocks_v1";
+    info.formatId = "hfc.zstd_jsonl_blocks";
     info.pipelineId = std::string{pipeline.id};
     info.transform = std::string{pipeline.transform};
     info.entropy = std::string{pipeline.entropy};
     info.streamType = hfcInfo.streamType;
-    info.version = hfcInfo.version;
     info.inputBytes = hfcInfo.inputBytes;
     info.outputBytes = hfcInfo.outputBytes;
     info.lineCount = hfcInfo.lineCount;

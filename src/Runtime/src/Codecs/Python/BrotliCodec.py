@@ -8,8 +8,8 @@ except ModuleNotFoundError:
     brotli = None
 
 DESCRIPTOR = PythonCodecDescriptor(
-    id="py.brotli_v1",
-    label="Python brotli v1",
+    id="py.brotli",
+    label="Python brotli",
     slug="py-brotli",
     extension=".br",
     module="brotli",

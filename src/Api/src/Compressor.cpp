@@ -139,13 +139,13 @@ CompressionResult compress(const CompressionRequest& request) noexcept {
 
 Status decodeHfcBuffer(std::span<const std::uint8_t> compressedFile,
                     const DecodedBlockCallback& onBlock) noexcept {
-    const auto* backend = pipelines::findBackend("std.zstd_jsonl_blocks_v1");
+    const auto* backend = pipelines::findBackend("std.zstd_jsonl_blocks");
     return backend != nullptr && backend->decodeBuffer != nullptr ? backend->decodeBuffer(compressedFile, onBlock) : Status::NotImplemented;
 }
 
 Status decodeHfcFile(const std::filesystem::path& path,
                     const DecodedBlockCallback& onBlock) noexcept {
-    const auto* backend = pipelines::findBackend("std.zstd_jsonl_blocks_v1");
+    const auto* backend = pipelines::findBackend("std.zstd_jsonl_blocks");
     return backend != nullptr && backend->decodeJsonl != nullptr ? backend->decodeJsonl(path, onBlock) : Status::NotImplemented;
 }
 

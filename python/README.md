@@ -23,8 +23,8 @@ Run from `apps/hft-compressor`:
 
 ```bash
 PYTHONPATH=python python3 -m hft_compressor list
-PYTHONPATH=python python3 -m hft_compressor compress ./session/trades.jsonl --codec py.gzip_v1 --output-root ./compressedData-python
-PYTHONPATH=python python3 -m hft_compressor verify ./compressedData-python/py-gzip/sessions/session/trades.pylab.gz ./session/trades.jsonl --codec py.gzip_v1
+PYTHONPATH=python python3 -m hft_compressor compress ./session/trades.jsonl --codec py.gzip --output-root ./compressedData-python
+PYTHONPATH=python python3 -m hft_compressor verify ./compressedData-python/py-gzip/sessions/session/trades.pylab.gz ./session/trades.jsonl --codec py.gzip
 ```
 
 You can also run the codec folder directly:
@@ -33,6 +33,6 @@ You can also run the codec folder directly:
 python3 src/Runtime/src/Codecs/Python/Cli.py list
 ```
 
-Available without extra packages: `py.gzip_v1`, `py.bz2_v1`, `py.lzma_v1`, `py.zlib_v1`.
-Optional: `py.brotli_v1`, `py.zstandard_v1`, `py.lz4_frame_v1`.
+Available without extra packages: `py.gzip`, `py.bz2`, `py.lzma`, `py.zlib`.
+Optional: `py.brotli`, `py.zstandard`, `py.lz4_frame`.
 

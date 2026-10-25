@@ -14,9 +14,8 @@ namespace hft_compressor {
 inline constexpr std::size_t kByteBlockMaxRecords = 256;
 inline constexpr std::size_t kByteBlockMaxRecordBytes = 1024;
 inline constexpr std::size_t kByteBlockMaxDepthLevels = 32;
-inline constexpr std::size_t kByteBlockHeaderBytes = 64;
+inline constexpr std::size_t kByteBlockHeaderBytes = 62;
 inline constexpr std::uint16_t kByteBlockCodec = 1;
-inline constexpr std::uint16_t kByteBlockSchemaVersion = 1;
 
 // Cold, independently decodable blocks. Offsets are record-relative; the
 // caller owns the record schema. Unknown selects opaque byte compression.

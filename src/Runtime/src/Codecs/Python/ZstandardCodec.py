@@ -8,8 +8,8 @@ except ModuleNotFoundError:
     zstandard = None
 
 DESCRIPTOR = PythonCodecDescriptor(
-    id="py.zstandard_v1",
-    label="Python zstandard v1",
+    id="py.zstandard",
+    label="Python zstandard",
     slug="py-zstandard",
     extension=".zst",
     module="zstandard",

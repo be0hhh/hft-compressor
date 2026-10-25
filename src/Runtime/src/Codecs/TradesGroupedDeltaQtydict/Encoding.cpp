@@ -344,7 +344,6 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     }
 
     FileHeader fileHeader{};
-    fileHeader.version = kCurrentArtifactVersion;
     fileHeader.stream = format::streamToWire(StreamType::Trades);
     fileHeader.lineEnding = detectLineEnding(input);
     fileHeader.chunkRecords = kDefaultChunkRecords;

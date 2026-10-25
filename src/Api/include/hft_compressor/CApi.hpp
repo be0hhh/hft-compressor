@@ -47,49 +47,49 @@ typedef struct hftc_replay_decode_request {
     size_t max_records_per_batch;
 } hftc_replay_decode_request;
 
-typedef struct hftc_trade_record_v1 {
+typedef struct hftc_trade_record {
     int64_t ts_ns;
     int64_t price_e8;
     int64_t qty_e8;
     int64_t side;
-} hftc_trade_record_v1;
+} hftc_trade_record;
 
-typedef struct hftc_bookticker_record_v1 {
+typedef struct hftc_bookticker_record {
     int64_t ts_ns;
     int64_t bid_price_e8;
     int64_t bid_qty_e8;
     int64_t ask_price_e8;
     int64_t ask_qty_e8;
-} hftc_bookticker_record_v1;
+} hftc_bookticker_record;
 
-typedef struct hftc_depth_level_v1 {
+typedef struct hftc_depth_level {
     int64_t price_e8;
     int64_t qty_e8;
     int64_t side;
-} hftc_depth_level_v1;
+} hftc_depth_level;
 
-typedef struct hftc_depth_record_v1 {
+typedef struct hftc_depth_record {
     int64_t ts_ns;
     uint32_t first_level_index;
     uint32_t level_count;
-} hftc_depth_record_v1;
+} hftc_depth_record;
 
-typedef struct hftc_record_batch_v1 {
+typedef struct hftc_record_batch {
     uint32_t stream_type;
     uint64_t first_line_number;
     uint64_t line_count;
     uint64_t decoded_bytes;
-    const hftc_trade_record_v1* trades;
+    const hftc_trade_record* trades;
     size_t trade_count;
-    const hftc_bookticker_record_v1* booktickers;
+    const hftc_bookticker_record* booktickers;
     size_t bookticker_count;
-    const hftc_depth_record_v1* depths;
+    const hftc_depth_record* depths;
     size_t depth_count;
-    const hftc_depth_level_v1* depth_levels;
+    const hftc_depth_level* depth_levels;
     size_t depth_level_count;
-} hftc_record_batch_v1;
+} hftc_record_batch;
 
-typedef int (*hftc_record_batch_callback)(const hftc_record_batch_v1* batch, void* user_data);
+typedef int (*hftc_record_batch_callback)(const hftc_record_batch* batch, void* user_data);
 
 typedef struct hftc_decoder hftc_decoder;
 

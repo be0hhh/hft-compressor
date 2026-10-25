@@ -79,13 +79,13 @@ int main(int argc, char** argv) {
             const auto* pipeline = hft_compressor::findPipeline(pipelineId);
             return pipeline && hft_compressor::isOk(inspect(input, *pipeline).status);
         };
-        if (matches("hftmac.trades_grouped_delta_qtydict_ac16_ctx0_v1", hft_compressor::codecs::entropy_hftmac::inspectArtifact))
+        if (matches("hftmac.trades_grouped_delta_qtydict_ac16_ctx0", hft_compressor::codecs::entropy_hftmac::inspectArtifact))
             status = tryEntropy();
-        else if (matches("hftmac.trades_grouped_delta_qtydict_math_v3", hft_compressor::codecs::trades_grouped_delta_qtydict::inspectArtifact))
+        else if (matches("hftmac.trades_grouped_delta_qtydict_math", hft_compressor::codecs::trades_grouped_delta_qtydict::inspectArtifact))
             status = tryTrade();
-        else if (matches("hftmac.bookticker_delta_mask_v2", hft_compressor::codecs::bookticker_delta_mask::inspectArtifact))
+        else if (matches("hftmac.bookticker_delta_mask", hft_compressor::codecs::bookticker_delta_mask::inspectArtifact))
             status = tryBookTicker();
-        else if (matches("hftmac.depth_ladder_offset_v3", hft_compressor::codecs::depth_ladder_offset::inspectArtifact))
+        else if (matches("hftmac.depth_ladder_offset", hft_compressor::codecs::depth_ladder_offset::inspectArtifact))
             status = tryCurrentDepth();
         else status = hft_compressor::Status::CorruptData;
         if (hft_compressor::isOk(status) && std::fflush(stdout) != 0)

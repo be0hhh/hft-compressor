@@ -48,7 +48,6 @@ std::array<std::uint8_t, kHeaderBytes> fixedHeader(Header header, bool includeCr
     std::array<std::uint8_t, kHeaderBytes> bytes{};
     std::span<std::uint8_t> out{bytes};
     writeLe(out, header.magic);
-    writeLe(out, header.version);
     writeLe(out, header.entropy);
     writeLe(out, header.base);
     writeLe(out, header.stream);
@@ -78,7 +77,6 @@ bool parseHeader(const std::uint8_t* data, std::size_t size, Header& out) noexce
     const auto* p = data;
     const auto* end = data + kHeaderBytes;
     return readLe(p, end, out.magic)
-        && readLe(p, end, out.version)
         && readLe(p, end, out.entropy)
         && readLe(p, end, out.base)
         && readLe(p, end, out.stream)
@@ -95,7 +93,6 @@ bool parseHeader(const std::uint8_t* data, std::size_t size, Header& out) noexce
 
 bool validHeader(const Header& header) noexcept {
     return header.magic == kMagic
-        && header.version == kVersion
         && header.base >= static_cast<std::uint16_t>(BaseKind::Trades)
         && header.base <= static_cast<std::uint16_t>(BaseKind::Depth)
         && header.entropy >= static_cast<std::uint16_t>(EntropyKind::Ac16Ctx0)
@@ -124,9 +121,9 @@ BaseKind baseKindFor(StreamType streamType) noexcept {
 
 std::string_view basePipelineId(BaseKind base) noexcept {
     switch (base) {
-        case BaseKind::Trades: return "hftmac.trades_grouped_delta_qtydict_math_v3";
-        case BaseKind::BookTicker: return "hftmac.bookticker_delta_mask_v2";
-        case BaseKind::Depth: return "hftmac.depth_ladder_offset_v3";
+        case BaseKind::Trades: return "hftmac.trades_grouped_delta_qtydict_math";
+        case BaseKind::BookTicker: return "hftmac.bookticker_delta_mask";
+        case BaseKind::Depth: return "hftmac.depth_ladder_offset";
     }
     return {};
 }
@@ -134,11 +131,11 @@ std::string_view basePipelineId(BaseKind base) noexcept {
 std::string_view formatIdFor(BaseKind base, EntropyKind kind) noexcept {
     (void)kind;
     switch (base) {
-        case BaseKind::Trades: return "hftmac.trades_grouped_delta_qtydict.entropy.v1";
-        case BaseKind::BookTicker: return "hftmac.bookticker_delta_mask.entropy.v1";
-        case BaseKind::Depth: return "hftmac.depth_ladder_offset.entropy.v1";
+        case BaseKind::Trades: return "hftmac.trades_grouped_delta_qtydict.entropy";
+        case BaseKind::BookTicker: return "hftmac.bookticker_delta_mask.entropy";
+        case BaseKind::Depth: return "hftmac.depth_ladder_offset.entropy";
     }
-    return "hftmac.entropy.v1";
+    return "hftmac.entropy";
 }
 
 std::string_view entropyName(EntropyKind kind) noexcept {

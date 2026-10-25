@@ -23,7 +23,7 @@ namespace hft_compressor {
 namespace {
 
 
-constexpr std::string_view kCurrentReplayPipelineId{"std.zstd_jsonl_blocks_v1"};
+constexpr std::string_view kCurrentReplayPipelineId{"std.zstd_jsonl_blocks"};
 
 HfcFileInfo failOpen(const std::filesystem::path& path, Status status, std::string error) {
     HfcFileInfo info{};
@@ -111,7 +111,6 @@ HfcFileInfo openHfcFile(const std::filesystem::path& path) noexcept {
     format::FileHeader header{};
     if (!format::parseFileHeader(fileHeaderBytes, sizeof(fileHeaderBytes), header)
         || header.magic != format::kFileMagic
-        || !format::isSupportedVersion(header.version)
         || header.codec != format::kCodecZstdJsonlBlocks
         || header.blockBytes == 0u) {
         return failOpen(path, Status::CorruptData, "invalid hfc header");
@@ -124,7 +123,6 @@ HfcFileInfo openHfcFile(const std::filesystem::path& path) noexcept {
     info.status = Status::Ok;
     info.path = path;
     info.streamType = format::streamFromWire(header.stream);
-    info.version = header.version;
     info.codec = header.codec;
     info.blockBytes = header.blockBytes;
     info.inputBytes = header.inputBytes;
@@ -255,7 +253,7 @@ Status inspectCompressedArtifact(const std::filesystem::path& path,
         if (view == "encoded-binary") return codecs::entropy_hftmac::inspectEncodedBinaryFile(path, onBlock);
         if (view == "stats") return codecs::entropy_hftmac::inspectStatsJsonFile(path, onBlock);
     }
-    if (pipelineId == "hftmac.trades_grouped_delta_qtydict_math_v3") {
+    if (pipelineId == "hftmac.trades_grouped_delta_qtydict_math") {
         if (view == "canonical-json" || view == "canonical-jsonl") {
             return codecs::trades_grouped_delta_qtydict::decodeFile(path, onBlock);
         }
@@ -269,13 +267,13 @@ Status inspectCompressedArtifact(const std::filesystem::path& path,
             return codecs::trades_grouped_delta_qtydict::inspectStatsJsonFile(path, onBlock);
         }
     }
-    if (pipelineId == "hftmac.bookticker_delta_mask_v2") {
+    if (pipelineId == "hftmac.bookticker_delta_mask") {
         if (view == "canonical-json" || view == "canonical-jsonl") return codecs::bookticker_delta_mask::decodeFile(path, onBlock);
         if (view == "encoded-json") return codecs::bookticker_delta_mask::inspectEncodedJsonFile(path, onBlock);
         if (view == "encoded-binary") return codecs::bookticker_delta_mask::inspectEncodedBinaryFile(path, onBlock);
         if (view == "stats") return codecs::bookticker_delta_mask::inspectStatsJsonFile(path, onBlock);
     }
-    if (pipelineId == "hftmac.depth_ladder_offset_v3") {
+    if (pipelineId == "hftmac.depth_ladder_offset") {
         if (view == "canonical-json" || view == "canonical-jsonl") return codecs::depth_ladder_offset::decodeFile(path, onBlock);
         if (view == "encoded-json") return codecs::depth_ladder_offset::inspectEncodedJsonFile(path, onBlock);
         if (view == "encoded-binary") return codecs::depth_ladder_offset::inspectEncodedBinaryFile(path, onBlock);

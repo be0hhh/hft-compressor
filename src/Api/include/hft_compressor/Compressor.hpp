@@ -33,7 +33,7 @@ enum class VerifyMode : std::uint8_t {
 struct DecodeVerifyRequest {
     std::filesystem::path compressedPath{};
     std::filesystem::path canonicalPath{};
-    std::string pipelineId{"std.zstd_jsonl_blocks_v1"};
+    std::string pipelineId{"std.zstd_jsonl_blocks"};
     bool verifyBytes{true};
     VerifyMode verifyMode{VerifyMode::Both};
 };
@@ -118,7 +118,6 @@ struct ReplayArtifactInfo {
     std::string transform{};
     std::string entropy{};
     StreamType streamType{StreamType::Unknown};
-    std::uint16_t version{0};
     std::uint64_t inputBytes{0};
     std::uint64_t outputBytes{0};
     std::uint64_t lineCount{0};
@@ -140,7 +139,6 @@ struct HfcFileInfo {
     std::string error{};
     std::filesystem::path path{};
     StreamType streamType{StreamType::Unknown};
-    std::uint16_t version{0};
     std::uint16_t codec{0};
     std::uint32_t blockBytes{0};
     std::uint64_t inputBytes{0};

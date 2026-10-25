@@ -12,7 +12,7 @@ namespace hft_compressor {
 namespace {
 namespace binary=codecs::byte_block;
 namespace entropy=codecs::entropy_hftmac::detail;
-constexpr std::uint32_t kMagic=0x31434248u; // HBC1
+constexpr std::uint32_t kMagic=0x00434248u; // HBC
 enum class Storage : std::uint8_t { Opaque=0, Transform=1, Arithmetic=2 };
 
 bool fits(std::size_t offset,std::size_t count,std::size_t bytes) noexcept {
@@ -170,14 +170,14 @@ Status encodeByteBlock(ByteBlockWorkspace& workspace,const ByteBlockLayout& l,st
             storage=Storage::Arithmetic; payload=arithmetic;
         }
         std::array<std::uint8_t,kByteBlockHeaderBytes> header{};
-        binary::put(header,0,kMagic,4); binary::put(header,4,kByteBlockSchemaVersion,2);
-        binary::put(header,6,kByteBlockCodec,2); header[8]=static_cast<std::uint8_t>(storage);
-        header[9]=static_cast<std::uint8_t>(l.streamType); binary::put(header,10,count,2);
-        binary::put(header,12,l.recordBytes,4); binary::put(header,16,records.size(),4);
-        binary::put(header,20,storage==Storage::Opaque ? records.size() : base.size(),4);
-        binary::put(header,24,payload.size(),4); binary::put(header,28,format::crc32c(records),4);
-        binary::put(header,32,format::crc32c(payload),4); binary::put(header,36,layoutCrc(l),4);
-        binary::put(header,40,format::crc32c(header),4);
+        binary::put(header,0,kMagic,4);
+        binary::put(header,4,kByteBlockCodec,2); header[6]=static_cast<std::uint8_t>(storage);
+        header[7]=static_cast<std::uint8_t>(l.streamType); binary::put(header,8,count,2);
+        binary::put(header,10,l.recordBytes,4); binary::put(header,14,records.size(),4);
+        binary::put(header,18,storage==Storage::Opaque ? records.size() : base.size(),4);
+        binary::put(header,22,payload.size(),4); binary::put(header,26,format::crc32c(records),4);
+        binary::put(header,30,format::crc32c(payload),4); binary::put(header,34,layoutCrc(l),4);
+        binary::put(header,38,format::crc32c(header),4);
         std::copy(header.begin(),header.end(),encoded.begin());
         std::copy(payload.begin(),payload.end(),encoded.begin()+kByteBlockHeaderBytes);
         bytes=kByteBlockHeaderBytes+payload.size(); return Status::Ok;
@@ -190,26 +190,26 @@ Status decodeByteBlock(ByteBlockWorkspace& workspace,const ByteBlockLayout& l,st
     if (encoded.size()<kByteBlockHeaderBytes) return Status::CorruptData;
     std::array<std::uint8_t,kByteBlockHeaderBytes> header{};
     std::copy_n(encoded.begin(),header.size(),header.begin());
-    const auto crc=binary::word(header,40,4); binary::put(header,40,0,4);
+    const auto crc=binary::word(header,38,4); binary::put(header,38,0,4);
     if (format::crc32c(header)!=crc || binary::word(header,0,4)!=kMagic ||
-        binary::word(header,4,2)!=kByteBlockSchemaVersion || binary::word(header,6,2)!=kByteBlockCodec ||
-        header[8]>static_cast<std::uint8_t>(Storage::Arithmetic) || header[9]!=static_cast<std::uint8_t>(l.streamType) ||
-        binary::word(header,12,4)!=l.recordBytes || binary::word(header,36,4)!=layoutCrc(l) ||
-        !std::all_of(header.begin()+44,header.end(),[](auto byte){return byte==0;})) return Status::CorruptData;
-    const auto count=static_cast<std::size_t>(binary::word(header,10,2));
-    const auto rawBytes=static_cast<std::size_t>(binary::word(header,16,4));
-    const auto baseBytes=static_cast<std::size_t>(binary::word(header,20,4));
-    const auto payloadBytes=static_cast<std::size_t>(binary::word(header,24,4));
+        binary::word(header,4,2)!=kByteBlockCodec ||
+        header[6]>static_cast<std::uint8_t>(Storage::Arithmetic) || header[7]!=static_cast<std::uint8_t>(l.streamType) ||
+        binary::word(header,10,4)!=l.recordBytes || binary::word(header,34,4)!=layoutCrc(l) ||
+        !std::all_of(header.begin()+42,header.end(),[](auto byte){return byte==0;})) return Status::CorruptData;
+    const auto count=static_cast<std::size_t>(binary::word(header,8,2));
+    const auto rawBytes=static_cast<std::size_t>(binary::word(header,14,4));
+    const auto baseBytes=static_cast<std::size_t>(binary::word(header,18,4));
+    const auto payloadBytes=static_cast<std::size_t>(binary::word(header,22,4));
     const auto bound=byteBlockEncodeBound(l,count);
     if (!bound || rawBytes!=count*l.recordBytes || baseBytes==0 || baseBytes>transformBound(rawBytes) ||
         payloadBytes==0 || payloadBytes>rawBytes || encoded.size()!=kByteBlockHeaderBytes+payloadBytes)
         return Status::CorruptData;
-    const auto storage=static_cast<Storage>(header[8]);
+    const auto storage=static_cast<Storage>(header[6]);
     if ((storage==Storage::Opaque && (baseBytes!=rawBytes || payloadBytes!=rawBytes)) ||
         (storage==Storage::Transform && baseBytes!=payloadBytes)) return Status::CorruptData;
     if (records.size()<rawBytes) return Status::InvalidArgument;
     const auto payload=encoded.subspan(kByteBlockHeaderBytes);
-    if (format::crc32c(payload)!=binary::word(header,32,4)) return Status::CorruptData;
+    if (format::crc32c(payload)!=binary::word(header,30,4)) return Status::CorruptData;
     try {
         workspace.reset();
         auto& raw=workspace.scratch_->raw;
@@ -223,7 +223,7 @@ Status decodeByteBlock(ByteBlockWorkspace& workspace,const ByteBlockLayout& l,st
             } else std::copy(payload.begin(),payload.end(),base.begin());
             if (!restore(l,base,raw)) return Status::CorruptData;
         }
-        if (!validRecords(l,raw) || format::crc32c(raw)!=binary::word(header,28,4)) return Status::CorruptData;
+        if (!validRecords(l,raw) || format::crc32c(raw)!=binary::word(header,26,4)) return Status::CorruptData;
         std::copy(raw.begin(),raw.end(),records.begin()); bytes=rawBytes; return Status::Ok;
     } catch (...) { return Status::DecodeError; }
 }

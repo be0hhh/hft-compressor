@@ -87,15 +87,15 @@ extern "C" hftc_status hftc_decoder_decode_all(hftc_decoder* decoder,
         const auto status = hft_compressor::decodeReplayRecordBatches(
             decoder->request,
             [&](const hft_compressor::ReplayRecordBatch& batch) -> bool {
-            std::vector<hftc_trade_record_v1> trades;
+            std::vector<hftc_trade_record> trades;
             trades.reserve(batch.trades.size());
             for (const auto& row : batch.trades) {
-                trades.push_back(hftc_trade_record_v1{row.tsNs, row.priceE8, row.qtyE8, row.side});
+                trades.push_back(hftc_trade_record{row.tsNs, row.priceE8, row.qtyE8, row.side});
             }
-            std::vector<hftc_bookticker_record_v1> booktickers;
+            std::vector<hftc_bookticker_record> booktickers;
             booktickers.reserve(batch.bookTickers.size());
             for (const auto& row : batch.bookTickers) {
-                booktickers.push_back(hftc_bookticker_record_v1{
+                booktickers.push_back(hftc_bookticker_record{
                     row.tsNs,
                     row.bidPriceE8,
                     row.bidQtyE8,
@@ -103,17 +103,17 @@ extern "C" hftc_status hftc_decoder_decode_all(hftc_decoder* decoder,
                     row.askQtyE8,
                 });
             }
-            std::vector<hftc_depth_record_v1> depths;
+            std::vector<hftc_depth_record> depths;
             depths.reserve(batch.depths.size());
             for (const auto& row : batch.depths) {
-                depths.push_back(hftc_depth_record_v1{row.tsNs, row.firstLevelIndex, row.levelCount});
+                depths.push_back(hftc_depth_record{row.tsNs, row.firstLevelIndex, row.levelCount});
             }
-            std::vector<hftc_depth_level_v1> depthLevels;
+            std::vector<hftc_depth_level> depthLevels;
             depthLevels.reserve(batch.depthLevels.size());
             for (const auto& row : batch.depthLevels) {
-                depthLevels.push_back(hftc_depth_level_v1{row.priceE8, row.qtyE8, row.side});
+                depthLevels.push_back(hftc_depth_level{row.priceE8, row.qtyE8, row.side});
             }
-            hftc_record_batch_v1 out{};
+            hftc_record_batch out{};
             out.stream_type = toCStreamType(batch.streamType);
             out.first_line_number = batch.firstLineNumber;
             out.line_count = batch.lineCount;

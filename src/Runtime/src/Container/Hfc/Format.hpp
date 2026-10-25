@@ -9,20 +9,18 @@
 
 namespace hft_compressor::format {
 
-inline constexpr std::uint32_t kFileMagic = 0x31434648u;
-inline constexpr std::uint32_t kBlockMagic = 0x30424648u;
-inline constexpr std::uint16_t kVersion = 2;
+inline constexpr std::uint32_t kFileMagic = 0x00434648u;
+inline constexpr std::uint32_t kBlockMagic = 0x00424648u;
 inline constexpr std::uint16_t kCodecZstdJsonlBlocks = 1;
 inline constexpr std::uint16_t kCodecLz4JsonlBlocks = 2;
 inline constexpr std::uint16_t kCodecBrotliJsonlBlocks = 3;
 inline constexpr std::uint16_t kCodecXzJsonlBlocks = 4;
 inline constexpr std::uint16_t kCodecGzipJsonlBlocks = 5;
-inline constexpr std::size_t kFileHeaderBytes = 64;
+inline constexpr std::size_t kFileHeaderBytes = 62;
 inline constexpr std::size_t kBlockHeaderBytes = 32;
 
 struct FileHeader {
     std::uint32_t magic{kFileMagic};
-    std::uint16_t version{kVersion};
     std::uint16_t codec{kCodecZstdJsonlBlocks};
     std::uint16_t stream{0};
     std::uint16_t reserved0{0};
@@ -47,7 +45,6 @@ std::vector<std::uint8_t> serializeFileHeader(const FileHeader& header);
 std::vector<std::uint8_t> serializeBlockHeader(const BlockHeader& header);
 bool parseFileHeader(const std::uint8_t* data, std::size_t len, FileHeader& out) noexcept;
 bool parseBlockHeader(const std::uint8_t* data, std::size_t len, BlockHeader& out) noexcept;
-bool isSupportedVersion(std::uint16_t version) noexcept;
 std::uint32_t crc32c(std::span<const std::uint8_t> data) noexcept;
 // State is the uncomplemented running CRC; initialize to 0xffffffffu.
 std::uint32_t updateCrc32c(std::uint32_t state, std::span<const std::uint8_t> data) noexcept;

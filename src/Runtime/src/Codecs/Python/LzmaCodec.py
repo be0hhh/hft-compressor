@@ -5,8 +5,8 @@ import lzma
 from Common import PythonCodecDescriptor, PythonCodecModule
 
 DESCRIPTOR = PythonCodecDescriptor(
-    id="py.lzma_v1",
-    label="Python lzma v1",
+    id="py.lzma",
+    label="Python lzma",
     slug="py-lzma",
     extension=".xz",
     module="lzma",

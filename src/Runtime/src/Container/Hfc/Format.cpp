@@ -44,7 +44,6 @@ std::vector<std::uint8_t> serializeFileHeader(const FileHeader& header) {
     std::vector<std::uint8_t> out;
     out.reserve(kFileHeaderBytes);
     writeLe(out, header.magic);
-    writeLe(out, header.version);
     writeLe(out, header.codec);
     writeLe(out, header.stream);
     writeLe(out, header.reserved0);
@@ -75,7 +74,7 @@ bool parseFileHeader(const std::uint8_t* data, std::size_t len, FileHeader& out)
     if (data == nullptr || len < kFileHeaderBytes) return false;
     const auto* p = data;
     const auto* end = data + kFileHeaderBytes;
-    const bool ok = readLe(p, end, out.magic) && readLe(p, end, out.version) && readLe(p, end, out.codec)
+    const bool ok = readLe(p, end, out.magic) && readLe(p, end, out.codec)
         && readLe(p, end, out.stream) && readLe(p, end, out.reserved0) && readLe(p, end, out.blockBytes)
         && readLe(p, end, out.inputBytes) && readLe(p, end, out.outputBytes)
         && readLe(p, end, out.lineCount) && readLe(p, end, out.blockCount);
@@ -93,9 +92,6 @@ bool parseBlockHeader(const std::uint8_t* data, std::size_t len, BlockHeader& ou
         && readLe(p, end, out.firstByteOffset) && readLe(p, end, out.reserved);
 }
 
-bool isSupportedVersion(std::uint16_t version) noexcept {
-    return version == kVersion;
-}
 
 std::uint32_t crc32c(std::span<const std::uint8_t> data) noexcept {
     return ~updateCrc32c(0xffffffffu, data);

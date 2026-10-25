@@ -5,8 +5,8 @@ import bz2
 from Common import PythonCodecDescriptor, PythonCodecModule
 
 DESCRIPTOR = PythonCodecDescriptor(
-    id="py.bz2_v1",
-    label="Python bz2 v1",
+    id="py.bz2",
+    label="Python bz2",
     slug="py-bz2",
     extension=".bz2",
     module="bz2",

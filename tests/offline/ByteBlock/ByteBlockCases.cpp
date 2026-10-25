@@ -31,8 +31,8 @@ void putSmall(std::vector<std::uint8_t>& bytes,std::size_t offset,unsigned count
     for (unsigned i=0;i<count;++i) bytes.at(offset+i)=static_cast<std::uint8_t>(value>>(8*i));
 }
 void repairHeader(std::vector<std::uint8_t>& block) {
-    putSmall(block,40,4,0);
-    putSmall(block,40,4,format::crc32c(std::span{block}.first(kByteBlockHeaderBytes)));
+    putSmall(block,38,4,0);
+    putSmall(block,38,4,format::crc32c(std::span{block}.first(kByteBlockHeaderBytes)));
 }
 std::vector<std::uint8_t> fixture(const ByteBlockLayout& shape, std::size_t count) {
     std::vector<std::uint8_t> raw(count*shape.recordBytes);
@@ -105,13 +105,13 @@ void corruptAndTruncatedBlocksNeverPublish() {
         CXET_CHECK(decodeByteBlock(shape,changed,output,bytes)==Status::CorruptData);
         CXET_CHECK(bytes==0 && output==before);
     }
-    for (std::size_t count:{std::size_t{0},std::size_t{63},block.size()-1}) {
+    for (std::size_t count:{std::size_t{0},kByteBlockHeaderBytes-1,block.size()-1}) {
         std::size_t bytes=999;
         CXET_CHECK(decodeByteBlock(shape,std::span{block}.first(count),output,bytes)==Status::CorruptData);
         CXET_CHECK(bytes==0 && output==before);
     }
     for (auto field:std::array<std::array<std::uint64_t,3>,5>{{
-            {4,2,99},{8,1,99},{10,2,257},{16,4,0xffffffffu},{20,4,0xffffffffu}}}) {
+            {4,2,99},{6,1,99},{8,2,257},{14,4,0xffffffffu},{18,4,0xffffffffu}}}) {
         auto forged=block; putSmall(forged,field[0],field[1],field[2]); repairHeader(forged);
         std::size_t bytes=999;
         CXET_CHECK(decodeByteBlock(shape,forged,output,bytes)==Status::CorruptData);
@@ -120,10 +120,10 @@ void corruptAndTruncatedBlocksNeverPublish() {
     // CRC-valid entropy truncation must still fail its exact final-bit check.
     std::vector<std::uint8_t> zeros(256*shape.recordBytes);
     auto entropyBlock=encode(shape,zeros);
-    CXET_CHECK(entropyBlock[8]==2);
+    CXET_CHECK(entropyBlock[6]==2);
     entropyBlock.pop_back();
-    putSmall(entropyBlock,24,4,entropyBlock.size()-kByteBlockHeaderBytes);
-    putSmall(entropyBlock,32,4,format::crc32c(std::span{entropyBlock}.subspan(kByteBlockHeaderBytes)));
+    putSmall(entropyBlock,22,4,entropyBlock.size()-kByteBlockHeaderBytes);
+    putSmall(entropyBlock,30,4,format::crc32c(std::span{entropyBlock}.subspan(kByteBlockHeaderBytes)));
     repairHeader(entropyBlock);
     output.assign(zeros.size(),0x5a); const auto untouched=output; std::size_t bytes=999;
     CXET_CHECK(decodeByteBlock(shape,entropyBlock,output,bytes)==Status::CorruptData);
@@ -256,7 +256,7 @@ void encodedFormatKnownSingleByteBlock() {
     // A one-byte unknown stream uses the unchanged plane transform. Arithmetic
     // cannot improve its one-byte payload; this is the complete wire contract.
     std::vector<std::uint8_t> expected(kByteBlockHeaderBytes+1);
-    putSmall(expected,0,4,0x31434248u);
+    putSmall(expected,0,4,0x00434248u);
     putSmall(expected,4,2,1); putSmall(expected,6,2,1);
     expected[8]=1;
     putSmall(expected,10,2,1); putSmall(expected,12,4,1);

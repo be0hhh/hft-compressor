@@ -2,14 +2,9 @@
 
 `hft-compressor` is the app-layer compression core and codec/pipeline library used by recorder/lab workflows.
 
-## Project-owned versioning
+## Project-owned contracts
 
-- Keep one canonical current compressor contract. Do not add parallel
-  `V1`/`V2`/`V3` types, compatibility aliases or forwarding facades; update all
-  in-repo producers and consumers atomically.
-- Numeric container/codec guards remain fail-closed, but current app-owned names
-  stay free of `V<number>`. Versioned names are limited to isolated legacy
-  decoders, externally dictated formats and immutable benchmark evidence.
+Follow the single-current contract rule in `../../docs/Agents/GlobalContracts.md`.
 
 ## Boundaries
 

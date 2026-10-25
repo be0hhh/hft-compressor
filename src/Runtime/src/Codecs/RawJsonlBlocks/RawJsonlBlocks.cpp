@@ -14,15 +14,13 @@
 namespace hft_compressor::codecs::raw_jsonl_blocks {
 namespace {
 
-constexpr std::uint32_t kFileMagic = 0x31524648u;
-constexpr std::uint32_t kBlockMagic = 0x30524648u;
-constexpr std::uint16_t kVersion = 1u;
-constexpr std::size_t kFileHeaderBytes = 64u;
+constexpr std::uint32_t kFileMagic = 0x00524648u;
+constexpr std::uint32_t kBlockMagic = 0x00524248u;
+constexpr std::size_t kFileHeaderBytes = 62u;
 constexpr std::size_t kBlockHeaderBytes = 32u;
 
 struct FileHeader {
     std::uint32_t magic{kFileMagic};
-    std::uint16_t version{kVersion};
     std::uint16_t stream{0};
     std::uint32_t blockBytes{0};
     std::uint64_t inputBytes{0};
@@ -62,7 +60,6 @@ std::vector<std::uint8_t> serializeFileHeader(FileHeader header, bool includeCrc
     std::vector<std::uint8_t> out;
     out.reserve(kFileHeaderBytes);
     writeLe(out, header.magic);
-    writeLe(out, header.version);
     writeLe(out, header.stream);
     writeLe(out, header.blockBytes);
     writeLe(out, header.inputBytes);
@@ -93,7 +90,6 @@ bool parseFileHeader(const std::uint8_t* data, std::size_t size, FileHeader& out
     const auto* p = data;
     const auto* end = data + kFileHeaderBytes;
     return readLe(p, end, out.magic)
-        && readLe(p, end, out.version)
         && readLe(p, end, out.stream)
         && readLe(p, end, out.blockBytes)
         && readLe(p, end, out.inputBytes)
@@ -126,7 +122,6 @@ std::uint32_t headerCrc32c(const FileHeader& header) {
 
 bool validHeader(const FileHeader& header) noexcept {
     return header.magic == kFileMagic
-        && header.version == kVersion
         && header.blockBytes != 0u
         && format::streamFromWire(header.stream) != StreamType::Unknown;
 }
@@ -405,12 +400,11 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const Pipe
     info.status = Status::Ok;
     info.found = true;
     info.path = path;
-    info.formatId = "hfr.raw_jsonl_blocks_v1";
+    info.formatId = "hfr.raw_jsonl_blocks";
     info.pipelineId = std::string{pipeline.id};
     info.transform = std::string{pipeline.transform};
     info.entropy = std::string{pipeline.entropy};
     info.streamType = format::streamFromWire(header.stream);
-    info.version = header.version;
     info.inputBytes = header.inputBytes;
     info.outputBytes = header.outputBytes;
     info.lineCount = header.lineCount;

@@ -54,7 +54,7 @@ Status decompressPayload(std::span<const std::uint8_t> input,
 
 const standard_jsonl_blocks::CodecSpec kSpec{
     format::kCodecBrotliJsonlBlocks,
-    "hfc.brotli_jsonl_blocks_v1",
+    "hfc.brotli_jsonl_blocks",
     "brotli encoder/decoder libraries were not found at configure time",
 #if HFT_COMPRESSOR_WITH_BROTLI
     compressPayload,

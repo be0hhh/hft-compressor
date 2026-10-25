@@ -64,7 +64,7 @@ Status decompressPayload(std::span<const std::uint8_t> input,
 
 const standard_jsonl_blocks::CodecSpec kSpec{
     format::kCodecLz4JsonlBlocks,
-    "hfc.lz4_jsonl_blocks_v1",
+    "hfc.lz4_jsonl_blocks",
     "liblz4 was not found at configure time",
 #if HFT_COMPRESSOR_WITH_LZ4
     compressPayload,

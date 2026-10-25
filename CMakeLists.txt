@@ -7,7 +7,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   include("${_hft_compressor_toolchain}")
   unset(_hft_compressor_toolchain)
 endif()
-project(hft-compressor LANGUAGES CXX VERSION 0.1.0)
+project(hft-compressor LANGUAGES CXX)
 
 if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   message(FATAL_ERROR "hft-compressor requires the pinned compiler selected by the canonical CXET root.")

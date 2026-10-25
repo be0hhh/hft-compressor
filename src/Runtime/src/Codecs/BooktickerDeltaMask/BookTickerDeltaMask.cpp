@@ -18,13 +18,11 @@ namespace hft_compressor::codecs::bookticker_delta_mask {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4b544243u; // B T C K little-endian wire
-constexpr std::uint16_t kCurrentArtifactVersion = 2u;
-constexpr std::size_t kHeaderBytes = 160u;
+constexpr std::size_t kHeaderBytes = 158u;
 
 struct Row { std::int64_t bid{0}, bidQty{0}, ask{0}, askQty{0}, ts{0}; };
 struct Header {
     std::uint32_t magic{kMagic};
-    std::uint16_t version{kCurrentArtifactVersion};
     std::uint16_t reserved{0};
     std::uint64_t inputBytes{0};
     std::uint64_t outputBytes{0};
@@ -97,7 +95,7 @@ template <class T> bool rd(const std::uint8_t*& p, const std::uint8_t* e, T& out
 
 std::vector<std::uint8_t> headerBytes(const Header& h) {
     std::vector<std::uint8_t> out; out.reserve(kHeaderBytes);
-    le(out,h.magic); le(out,h.version); le(out,h.reserved); le(out,h.inputBytes); le(out,h.outputBytes); le(out,h.recordCount);
+    le(out,h.magic); le(out,h.reserved); le(out,h.inputBytes); le(out,h.outputBytes); le(out,h.recordCount);
     le(out,h.timeScale); le(out,h.priceScale); le(out,h.qtyScale); le(out,h.baseTsUnit); le(out,h.baseBidTick); le(out,h.baseSpreadTick); le(out,h.baseBidQtyLot); le(out,h.baseAskQtyLot);
     le(out,h.timeBytes); le(out,h.maskBytes); le(out,h.bidBytes); le(out,h.spreadBytes); le(out,h.bidQtyBytes); le(out,h.askQtyBytes);
     le(out,h.maskNonZero); le(out,h.bidChanged); le(out,h.spreadChanged); le(out,h.bidQtyChanged); le(out,h.askQtyChanged);
@@ -106,11 +104,11 @@ std::vector<std::uint8_t> headerBytes(const Header& h) {
 
 bool readHeader(std::span<const std::uint8_t> data, Header& h) noexcept {
     if (data.size() < kHeaderBytes) return false; const auto* p = data.data(); const auto* e = data.data() + kHeaderBytes;
-    return rd(p,e,h.magic) && rd(p,e,h.version) && rd(p,e,h.reserved) && rd(p,e,h.inputBytes) && rd(p,e,h.outputBytes) && rd(p,e,h.recordCount)
+    return rd(p,e,h.magic) && rd(p,e,h.reserved) && rd(p,e,h.inputBytes) && rd(p,e,h.outputBytes) && rd(p,e,h.recordCount)
         && rd(p,e,h.timeScale) && rd(p,e,h.priceScale) && rd(p,e,h.qtyScale) && rd(p,e,h.baseTsUnit) && rd(p,e,h.baseBidTick) && rd(p,e,h.baseSpreadTick) && rd(p,e,h.baseBidQtyLot) && rd(p,e,h.baseAskQtyLot)
         && rd(p,e,h.timeBytes) && rd(p,e,h.maskBytes) && rd(p,e,h.bidBytes) && rd(p,e,h.spreadBytes) && rd(p,e,h.bidQtyBytes) && rd(p,e,h.askQtyBytes)
         && rd(p,e,h.maskNonZero) && rd(p,e,h.bidChanged) && rd(p,e,h.spreadChanged) && rd(p,e,h.bidQtyChanged) && rd(p,e,h.askQtyChanged)
-        && h.magic == kMagic && h.version == kCurrentArtifactVersion && h.timeScale != 0 && h.priceScale != 0 && h.qtyScale != 0
+        && h.magic == kMagic && h.timeScale != 0 && h.priceScale != 0 && h.qtyScale != 0
         && std::all_of(p, e, [](auto byte) { return byte == 0u; });
 }
 
@@ -151,7 +149,7 @@ Status decodeColumns(const internal::DecodeSource& source, const DecodedBlockCal
     if (!internal::multiplyI64(ts, h.timeScale, baseTime) || !internal::multiplyI64(bid, h.priceScale, baseBid)
         || !internal::multiplyI64(spread, h.priceScale, baseSpread) || !internal::multiplyI64(bq, h.qtyScale, baseBq)
         || !internal::multiplyI64(aq, h.qtyScale, baseAq)) return Status::CorruptData;
-    if (encoded) *encoded << "{\n  \"pipeline_id\": \"hftmac.bookticker_delta_mask_v2\",\n  \"record_count\": " << h.recordCount << ",\n  \"base_state\": {\"ts\": " << baseTime << ", \"bid\": " << baseBid << ", \"spread\": " << baseSpread << ", \"bid_qty\": " << baseBq << ", \"ask_qty\": " << baseAq << "},\n  \"updates\": [\n";
+    if (encoded) *encoded << "{\n  \"pipeline_id\": \"hftmac.bookticker_delta_mask\",\n  \"record_count\": " << h.recordCount << ",\n  \"base_state\": {\"ts\": " << baseTime << ", \"bid\": " << baseBid << ", \"spread\": " << baseSpread << ", \"bid_qty\": " << baseBq << ", \"ask_qty\": " << baseAq << "},\n  \"updates\": [\n";
     for (std::uint64_t i=0; i<h.recordCount; ++i) {
         std::uint8_t m{};
         std::uint64_t dt{};
@@ -208,7 +206,7 @@ Status decodeBytes(std::span<const std::uint8_t> data, std::string* jsonl, std::
 }
 
 std::string statsJson(const Header& h) {
-    std::ostringstream o; o << "{\n  \"pipeline_id\": \"hftmac.bookticker_delta_mask_v2\",\n  \"version\": " << h.version << ",\n  \"record_count\": " << h.recordCount << ",\n  \"raw_runtime_bytes\": " << (h.recordCount*40u) << ",\n  \"encoded_bytes\": " << h.outputBytes << ",\n  \"bytes_per_record\": " << (h.recordCount? static_cast<double>(h.outputBytes)/static_cast<double>(h.recordCount):0.0) << ",\n  \"mask_nonzero_count\": " << h.maskNonZero << ",\n  \"bid_changed_count\": " << h.bidChanged << ",\n  \"spread_changed_count\": " << h.spreadChanged << ",\n  \"bid_qty_changed_count\": " << h.bidQtyChanged << ",\n  \"ask_qty_changed_count\": " << h.askQtyChanged << ",\n  \"time_stream_bytes\": " << h.timeBytes << ",\n  \"mask_stream_bytes\": " << h.maskBytes << ",\n  \"bid_delta_stream_bytes\": " << h.bidBytes << ",\n  \"spread_delta_stream_bytes\": " << h.spreadBytes << ",\n  \"bid_qty_delta_stream_bytes\": " << h.bidQtyBytes << ",\n  \"ask_qty_delta_stream_bytes\": " << h.askQtyBytes << "\n}\n"; return o.str();
+    std::ostringstream o; o << "{\n  \"pipeline_id\": \"hftmac.bookticker_delta_mask\",\n  \"record_count\": " << h.recordCount << ",\n  \"raw_runtime_bytes\": " << (h.recordCount*40u) << ",\n  \"encoded_bytes\": " << h.outputBytes << ",\n  \"bytes_per_record\": " << (h.recordCount? static_cast<double>(h.outputBytes)/static_cast<double>(h.recordCount):0.0) << ",\n  \"mask_nonzero_count\": " << h.maskNonZero << ",\n  \"bid_changed_count\": " << h.bidChanged << ",\n  \"spread_changed_count\": " << h.spreadChanged << ",\n  \"bid_qty_changed_count\": " << h.bidQtyChanged << ",\n  \"ask_qty_changed_count\": " << h.askQtyChanged << ",\n  \"time_stream_bytes\": " << h.timeBytes << ",\n  \"mask_stream_bytes\": " << h.maskBytes << ",\n  \"bid_delta_stream_bytes\": " << h.bidBytes << ",\n  \"spread_delta_stream_bytes\": " << h.spreadBytes << ",\n  \"bid_qty_delta_stream_bytes\": " << h.bidQtyBytes << ",\n  \"ask_qty_delta_stream_bytes\": " << h.askQtyBytes << "\n}\n"; return o.str();
 }
 
 bool readFile(const std::filesystem::path& p, std::vector<std::uint8_t>& out) { return internal::readFileBytes(p,out); }
@@ -222,7 +220,7 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     CompressionResult r{}; internal::applyPipeline(r,&pipeline); r.streamType=StreamType::BookTicker; r.inputPath=request.inputPath; const auto total=timing::nowNs();
     std::vector<std::uint8_t> input; const auto rs=timing::nowNs(); if (!internal::readFileBytes(request.inputPath,input)) { auto f=internal::fail(Status::IoError,request,&pipeline,"failed to read input file");  return f; } r.readNs=timing::nowNs()-rs; r.inputBytes=input.size();
     std::vector<Row> rows; const auto ps=timing::nowNs(); rows.reserve(std::count(input.begin(),input.end(),static_cast<std::uint8_t>('\n'))+1u); if (!parseRows(input,rows)) { auto f=internal::fail(Status::CorruptData,request,&pipeline,"input is not canonical bookticker jsonl");  return f; } r.parseNs=timing::nowNs()-ps;
-    Header h{}; h.version = kCurrentArtifactVersion; h.inputBytes=r.inputBytes; h.recordCount=rows.size(); std::int64_t timeG=rows.front().ts, priceG=0, qtyG=0; for (const auto& x: rows) { timeG=gcdAbs(timeG,x.ts-rows.front().ts); priceG=gcdAbs(priceG,x.bid); priceG=gcdAbs(priceG,x.ask); qtyG=gcdAbs(qtyG,x.bidQty); qtyG=gcdAbs(qtyG,x.askQty); } h.timeScale=safeScale(timeG); h.priceScale=safeScale(priceG); h.qtyScale=safeScale(qtyG);
+    Header h{}; h.inputBytes=r.inputBytes; h.recordCount=rows.size(); std::int64_t timeG=rows.front().ts, priceG=0, qtyG=0; for (const auto& x: rows) { timeG=gcdAbs(timeG,x.ts-rows.front().ts); priceG=gcdAbs(priceG,x.bid); priceG=gcdAbs(priceG,x.ask); qtyG=gcdAbs(qtyG,x.bidQty); qtyG=gcdAbs(qtyG,x.askQty); } h.timeScale=safeScale(timeG); h.priceScale=safeScale(priceG); h.qtyScale=safeScale(qtyG);
     h.baseTsUnit=rows.front().ts/h.timeScale; h.baseBidTick=rows.front().bid/h.priceScale; h.baseSpreadTick=(rows.front().ask-rows.front().bid)/h.priceScale; h.baseBidQtyLot=rows.front().bidQty/h.qtyScale; h.baseAskQtyLot=rows.front().askQty/h.qtyScale;
     std::vector<std::uint8_t> timeS, maskS, bidS, spreadS, bidQtyS, askQtyS; const auto es=timing::nowNs(); const auto ec0=timing::readCycles();
     std::int64_t pts=h.baseTsUnit, pb=h.baseBidTick, pspr=h.baseSpreadTick, pbq=h.baseBidQtyLot, paq=h.baseAskQtyLot;
@@ -234,7 +232,7 @@ CompressionResult compress(const CompressionRequest& request, const PipelineDesc
     std::string decoded; const auto ds=timing::nowNs(); const auto dc=timing::readCycles(); std::vector<std::uint8_t> file; readFile(outPath,file); const auto st=decodeBytes(file,&decoded,nullptr); r.decodeCycles=timing::readCycles()-dc; r.decodeNs=timing::nowNs()-ds; r.decodeCoreNs=r.decodeNs; r.roundtripOk=isOk(st)&&decoded.size()==input.size()&&std::equal(decoded.begin(),decoded.end(),reinterpret_cast<const char*>(input.data())); r.status=r.roundtripOk?Status::Ok:Status::DecodeError; if(!r.roundtripOk) r.error="roundtrip check failed"; (void)internal::writeTextFile(r.metricsPath,toMetricsJson(r));  return r;
 } catch (...) { CompressionResult failed{}; failed.status = Status::DecodeError; return failed; }
 
-ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept try { internal::FileDecodeSource source(path); std::array<std::uint8_t, kHeaderBytes> data{}; ReplayArtifactInfo i{}; i.path=path; if(!source.valid() || !source.read(0u, data)){i.status=Status::IoError;i.error="failed to read artifact";return i;} Header h{}; if(!readHeader(data,h) || h.outputBytes != source.size() || !source.unchanged()){i.status=Status::CorruptData;i.error="invalid bookticker artifact";return i;} i.status=Status::Ok; i.found=true; i.formatId="hftmac.bookticker_delta_mask.v2"; i.pipelineId=std::string{pipeline.id}; i.transform=std::string{pipeline.transform}; i.entropy=std::string{pipeline.entropy}; i.streamType=StreamType::BookTicker; i.version=h.version; i.inputBytes=h.inputBytes; i.outputBytes=h.outputBytes; i.lineCount=h.recordCount; i.blockCount=1; return i; } catch (...) { ReplayArtifactInfo failed{}; failed.status = Status::DecodeError; return failed; }
+ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept try { internal::FileDecodeSource source(path); std::array<std::uint8_t, kHeaderBytes> data{}; ReplayArtifactInfo i{}; i.path=path; if(!source.valid() || !source.read(0u, data)){i.status=Status::IoError;i.error="failed to read artifact";return i;} Header h{}; if(!readHeader(data,h) || h.outputBytes != source.size() || !source.unchanged()){i.status=Status::CorruptData;i.error="invalid bookticker artifact";return i;} i.status=Status::Ok; i.found=true; i.formatId="hftmac.bookticker_delta_mask"; i.pipelineId=std::string{pipeline.id}; i.transform=std::string{pipeline.transform}; i.entropy=std::string{pipeline.entropy}; i.streamType=StreamType::BookTicker; i.inputBytes=h.inputBytes; i.outputBytes=h.outputBytes; i.lineCount=h.recordCount; i.blockCount=1; return i; } catch (...) { ReplayArtifactInfo failed{}; failed.status = Status::DecodeError; return failed; }
 Status decodeSource(const internal::DecodeSource& source, const DecodedBlockCallback& onBlock) {
     if (!onBlock) return Status::InvalidArgument;
     return decodeColumns(source, &onBlock, nullptr);
@@ -265,7 +263,7 @@ Status decodeFile(const std::filesystem::path& path, const DecodedBlockCallback&
     } catch (...) { return Status::DecodeError; }
 }
 Status inspectEncodedJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& cb) noexcept try { std::vector<std::uint8_t> data; if(!readFile(path,data)) return Status::IoError; std::ostringstream out; const auto st=decodeBytes(data,nullptr,&out); if(!isOk(st)) return st; return emitText(out.str(),cb); } catch (...) { return Status::DecodeError; }
-Status inspectEncodedBinaryFile(const std::filesystem::path& path, const DecodedBlockCallback& cb) noexcept try { internal::FileDecodeSource source(path); std::array<std::uint8_t, kHeaderBytes> data{}; if(!source.valid() || !source.read(0u, data)) return Status::IoError; std::ostringstream o; Header h{}; if(!readHeader(data,h) || h.outputBytes != source.size() || !source.unchanged()) return Status::CorruptData; o << "bookticker_delta_mask_v2" << " bytes=" << source.size() << " header=" << kHeaderBytes << " time=" << h.timeBytes << " mask=" << h.maskBytes << " bid=" << h.bidBytes << " spread=" << h.spreadBytes << " bid_qty=" << h.bidQtyBytes << " ask_qty=" << h.askQtyBytes << "\n"; return emitText(o.str(),cb); } catch (...) { return Status::DecodeError; }
+Status inspectEncodedBinaryFile(const std::filesystem::path& path, const DecodedBlockCallback& cb) noexcept try { internal::FileDecodeSource source(path); std::array<std::uint8_t, kHeaderBytes> data{}; if(!source.valid() || !source.read(0u, data)) return Status::IoError; std::ostringstream o; Header h{}; if(!readHeader(data,h) || h.outputBytes != source.size() || !source.unchanged()) return Status::CorruptData; o << "bookticker_delta_mask" << " bytes=" << source.size() << " header=" << kHeaderBytes << " time=" << h.timeBytes << " mask=" << h.maskBytes << " bid=" << h.bidBytes << " spread=" << h.spreadBytes << " bid_qty=" << h.bidQtyBytes << " ask_qty=" << h.askQtyBytes << "\n"; return emitText(o.str(),cb); } catch (...) { return Status::DecodeError; }
 Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& cb) noexcept try { internal::FileDecodeSource source(path); std::array<std::uint8_t, kHeaderBytes> data{}; if(!source.valid() || !source.read(0u, data)) return Status::IoError; Header h{}; if(!readHeader(data,h) || h.outputBytes != source.size() || !source.unchanged()) return Status::CorruptData; return emitText(statsJson(h),cb); } catch (...) { return Status::DecodeError; }
 
 }  // namespace hft_compressor::codecs::bookticker_delta_mask

@@ -60,7 +60,6 @@ std::vector<std::uint8_t> serializeFileHeader(FileHeader header, bool includeCrc
     std::vector<std::uint8_t> out;
     out.reserve(kFileHeaderBytes);
     writeLe(out, header.magic);
-    writeLe(out, header.version);
     writeLe(out, header.stream);
     writeLe(out, header.lineEnding);
     writeLe(out, header.reserved);
@@ -118,7 +117,6 @@ bool parseFileHeader(const std::uint8_t* data, std::size_t size, FileHeader& out
     const auto* p = data;
     const auto* end = data + kFileHeaderBytes;
     return readLe(p, end, out.magic)
-        && readLe(p, end, out.version)
         && readLe(p, end, out.stream)
         && readLe(p, end, out.lineEnding)
         && readLe(p, end, out.reserved)
@@ -175,7 +173,6 @@ std::uint32_t headerCrc32c(const FileHeader& header) {
 
 bool validHeader(const FileHeader& header) noexcept {
     return header.magic == kFileMagic
-        && header.version == kCurrentArtifactVersion
         && format::streamFromWire(header.stream) == StreamType::Trades
         && (header.lineEnding == 1u || header.lineEnding == 2u)
         && header.reserved == 0u

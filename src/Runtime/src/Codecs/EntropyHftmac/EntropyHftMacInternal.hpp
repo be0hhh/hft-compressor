@@ -25,12 +25,11 @@
 
 namespace hft_compressor::codecs::entropy_hftmac::detail {
 
-constexpr std::uint32_t kMagic = 0x31464845u;
+constexpr std::uint32_t kMagic = 0x00464845u;
 
-// EHF1
-constexpr std::uint16_t kVersion = 1u;
+// EHF
 
-constexpr std::size_t kHeaderBytes = 128u;
+constexpr std::size_t kHeaderBytes = 126u;
 
 constexpr std::uint32_t kTopValue = 0xffffffffu;
 
@@ -57,7 +56,6 @@ enum class EntropyKind : std::uint16_t {
 
 struct Header {
     std::uint32_t magic{kMagic};
-    std::uint16_t version{kVersion};
     std::uint16_t entropy{0};
     std::uint16_t base{0};
     std::uint16_t stream{0};

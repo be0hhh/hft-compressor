@@ -5,8 +5,8 @@ import zlib
 from Common import PythonCodecDescriptor, PythonCodecModule
 
 DESCRIPTOR = PythonCodecDescriptor(
-    id="py.zlib_v1",
-    label="Python zlib v1",
+    id="py.zlib",
+    label="Python zlib",
     slug="py-zlib",
     extension=".zz",
     module="zlib",

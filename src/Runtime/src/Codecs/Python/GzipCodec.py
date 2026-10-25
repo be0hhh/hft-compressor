@@ -5,8 +5,8 @@ import gzip
 from Common import PythonCodecDescriptor, PythonCodecModule
 
 DESCRIPTOR = PythonCodecDescriptor(
-    id="py.gzip_v1",
-    label="Python gzip v1",
+    id="py.gzip",
+    label="Python gzip",
     slug="py-gzip",
     extension=".gz",
     module="gzip",

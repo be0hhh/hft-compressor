@@ -36,12 +36,11 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const Pipe
     info.status = Status::Ok;
     info.found = true;
     info.path = path;
-    info.formatId = "hftmac.trades_grouped_delta_qtydict.math.v3";
+    info.formatId = "hftmac.trades_grouped_delta_qtydict.math";
     info.pipelineId = std::string{pipeline.id};
     info.transform = std::string{pipeline.transform};
     info.entropy = std::string{pipeline.entropy};
     info.streamType = StreamType::Trades;
-    info.version = header.version;
     info.inputBytes = header.inputBytes;
     info.outputBytes = header.outputBytes;
     info.lineCount = header.recordCount;
@@ -126,8 +125,7 @@ Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBloc
 
     std::ostringstream out;
     out << "{\n"
-        << "  \"pipeline_id\": \"hftmac.trades_grouped_delta_qtydict_math_v3\",\n"
-        << "  \"version\": " << header.version << ",\n"
+        << "  \"pipeline_id\": \"hftmac.trades_grouped_delta_qtydict_math\",\n"
         << "  \"record_count\": " << header.recordCount << ",\n"
         << "  \"chunk_count\": " << header.chunkCount << ",\n"
         << "  \"input_bytes\": " << header.inputBytes << ",\n"

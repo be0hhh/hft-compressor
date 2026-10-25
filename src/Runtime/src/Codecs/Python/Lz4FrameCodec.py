@@ -10,8 +10,8 @@ else:
     import lz4
 
 DESCRIPTOR = PythonCodecDescriptor(
-    id="py.lz4_frame_v1",
-    label="Python lz4.frame v1",
+    id="py.lz4_frame",
+    label="Python lz4.frame",
     slug="py-lz4-frame",
     extension=".lz4",
     module="lz4.frame",

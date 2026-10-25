@@ -25,8 +25,7 @@ namespace hft_compressor::codecs::trades_grouped_delta_qtydict::codec_detail {
 
 constexpr std::uint32_t kFileMagic = 0x46435843u;  // CXCF
 constexpr std::uint32_t kChunkMagic = 0x4b484354u; // TCHK
-constexpr std::uint16_t kCurrentArtifactVersion = 3u;
-constexpr std::size_t kFileHeaderBytes = 96u;
+constexpr std::size_t kFileHeaderBytes = 94u;
 constexpr std::size_t kChunkHeaderBytes = 160u;
 
 constexpr std::uint32_t kDefaultChunkRecords = 16u * 1024u;
@@ -75,7 +74,6 @@ struct EncodedChunk {
 
 struct FileHeader {
     std::uint32_t magic{kFileMagic};
-    std::uint16_t version{kCurrentArtifactVersion};
     std::uint16_t stream{0};
     std::uint16_t lineEnding{1};
     std::uint16_t reserved{0};

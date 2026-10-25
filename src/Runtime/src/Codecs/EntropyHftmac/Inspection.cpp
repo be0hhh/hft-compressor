@@ -56,7 +56,6 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const Pipe
     info.transform = std::string{pipeline.transform};
     info.entropy = std::string{pipeline.entropy};
     info.streamType = format::streamFromWire(header.stream);
-    info.version = header.version;
     info.inputBytes = header.inputBytes;
     info.outputBytes = header.outputBytes;
     info.lineCount = header.lineCount;
@@ -100,7 +99,6 @@ Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBloc
     std::ostringstream out;
     out << "{\n"
         << "  \"pipeline_family\": \"entropy_hftmac\",\n"
-        << "  \"version\": " << header.version << ",\n"
         << "  \"stream\": \"" << streamTypeToString(format::streamFromWire(header.stream)) << "\",\n"
         << "  \"entropy\": \"" << entropyName(static_cast<EntropyKind>(header.entropy)) << "\",\n"
         << "  \"input_bytes\": " << header.inputBytes << ",\n"
