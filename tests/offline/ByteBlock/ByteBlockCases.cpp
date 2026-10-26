@@ -255,15 +255,16 @@ void encodedFormatKnownSingleByteBlock() {
     const std::vector<std::uint8_t> raw{0xa5};
     // A one-byte unknown stream uses the unchanged plane transform. Arithmetic
     // cannot improve its one-byte payload; this is the complete wire contract.
+    // Header: magic/codec at 0/4, one-byte storage/stream at 6/7, count at 8,
+    // four-byte sizes at 10/14/18/22, CRCs at 26/30/34/38, then 20 zero bytes.
     std::vector<std::uint8_t> expected(kByteBlockHeaderBytes+1);
     putSmall(expected,0,4,0x00434248u);
-    putSmall(expected,4,2,1); putSmall(expected,6,2,1);
-    expected[8]=1;
-    putSmall(expected,10,2,1); putSmall(expected,12,4,1);
-    putSmall(expected,16,4,1); putSmall(expected,20,4,1); putSmall(expected,24,4,1);
-    putSmall(expected,28,4,format::crc32c(raw)); putSmall(expected,32,4,format::crc32c(raw));
+    putSmall(expected,4,2,1); expected[6]=1;
+    putSmall(expected,8,2,1); putSmall(expected,10,4,1);
+    putSmall(expected,14,4,1); putSmall(expected,18,4,1); putSmall(expected,22,4,1);
+    putSmall(expected,26,4,format::crc32c(raw)); putSmall(expected,30,4,format::crc32c(raw));
     std::vector<std::uint8_t> layoutBytes(32); layoutBytes[4]=1;
-    putSmall(expected,36,4,format::crc32c(layoutBytes));
+    putSmall(expected,34,4,format::crc32c(layoutBytes));
     expected.back()=raw.front(); repairHeader(expected);
     ByteBlockWorkspace workspace; CXET_CHECK(workspace.prepare()==Status::Ok);
     std::vector<std::uint8_t> actual(expected.size()); std::size_t bytes=999;
