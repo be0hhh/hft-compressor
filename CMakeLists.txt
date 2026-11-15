@@ -149,7 +149,7 @@ target_include_directories(hft_compressor_core
         ${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime/src
 )
 target_compile_features(hft_compressor_core PUBLIC cxx_std_23)
-if(NOT HFT_COMPRESSOR_PORTABLE_BUILD)
+if(HFT_COMPRESSOR_STANDALONE AND NOT HFT_COMPRESSOR_PORTABLE_BUILD)
     target_compile_options(hft_compressor_core PRIVATE
         $<$<CONFIG:Release>:-O3>
         $<$<CONFIG:Release>:-march=native>
@@ -216,7 +216,7 @@ if(HFT_COMPRESSOR_BUILD_CLI)
         CXX_EXTENSIONS OFF
     )
     target_link_libraries(hft-compressor PRIVATE hft_compressor_core)
-    if(NOT HFT_COMPRESSOR_PORTABLE_BUILD)
+    if(HFT_COMPRESSOR_STANDALONE AND NOT HFT_COMPRESSOR_PORTABLE_BUILD)
         target_compile_options(hft-compressor PRIVATE
             $<$<CONFIG:Release>:-O3>
             $<$<CONFIG:Release>:-march=native>
