@@ -92,7 +92,6 @@ bool parseBlockHeader(const std::uint8_t* data, std::size_t len, BlockHeader& ou
         && readLe(p, end, out.firstByteOffset) && readLe(p, end, out.reserved);
 }
 
-
 std::uint32_t crc32c(std::span<const std::uint8_t> data) noexcept {
     return ~updateCrc32c(0xffffffffu, data);
 }
@@ -141,6 +140,7 @@ std::uint16_t streamToWire(StreamType type) noexcept {
         case StreamType::Trades: return 1;
         case StreamType::BookTicker: return 2;
         case StreamType::Depth: return 3;
+        case StreamType::DepthCoverage: return 4;
         case StreamType::Unknown: return 0;
     }
     return 0;
@@ -151,6 +151,7 @@ StreamType streamFromWire(std::uint16_t value) noexcept {
         case 1: return StreamType::Trades;
         case 2: return StreamType::BookTicker;
         case 3: return StreamType::Depth;
+        case 4: return StreamType::DepthCoverage;
         default: return StreamType::Unknown;
     }
 }

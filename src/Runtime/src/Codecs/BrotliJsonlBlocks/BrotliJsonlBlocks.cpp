@@ -1,4 +1,5 @@
 #include "BrotliJsonlBlocks.hpp"
+#include "../ExternalBlockPrimitives.hpp"
 
 #include <algorithm>
 #include <string>
@@ -12,6 +13,73 @@
 #include <brotli/encode.h>
 #endif
 
+namespace hft_compressor::codecs::external_primitives {
+
+bool brotliAvailable() noexcept {
+#if HFT_COMPRESSOR_WITH_BROTLI
+    return true;
+#else
+    return false;
+#endif
+}
+
+std::size_t brotliCompressBound(std::size_t inputBytes) noexcept {
+#if HFT_COMPRESSOR_WITH_BROTLI
+    return BrotliEncoderMaxCompressedSize(inputBytes);
+#else
+    (void)inputBytes;
+    return 0u;
+#endif
+}
+
+Status brotliCompressBlock(
+    int quality,
+    std::span<const std::uint8_t> src,
+    std::span<std::uint8_t> dst,
+    std::size_t& written) noexcept {
+    written = 0u;
+#if HFT_COMPRESSOR_WITH_BROTLI
+    const int q = std::clamp(quality, 1, 11);
+    std::size_t encodedSize = dst.size();
+    if (BrotliEncoderCompress(
+            q,
+            BROTLI_DEFAULT_WINDOW,
+            BROTLI_MODE_GENERIC,
+            src.size(),
+            src.data(),
+            &encodedSize,
+            dst.data()) == BROTLI_FALSE) {
+        return Status::DecodeError;
+    }
+    written = encodedSize;
+    return Status::Ok;
+#else
+    (void)quality;
+    (void)src;
+    (void)dst;
+    return Status::DependencyUnavailable;
+#endif
+}
+
+Status brotliDecompressBlock(
+    std::span<const std::uint8_t> src,
+    std::span<std::uint8_t> dst) noexcept {
+#if HFT_COMPRESSOR_WITH_BROTLI
+    std::size_t decodedSize = dst.size();
+    const auto status = BrotliDecoderDecompress(src.size(), src.data(), &decodedSize, dst.data());
+    if (status != BROTLI_DECODER_RESULT_SUCCESS || decodedSize != dst.size()) {
+        return Status::CorruptData;
+    }
+    return Status::Ok;
+#else
+    (void)src;
+    (void)dst;
+    return Status::DependencyUnavailable;
+#endif
+}
+
+} // namespace hft_compressor::codecs::external_primitives
+
 namespace hft_compressor::codecs::brotli_jsonl_blocks {
 namespace {
 
@@ -20,20 +88,14 @@ Status compressPayload(std::span<const std::uint8_t> plain,
                        int level,
                        std::vector<std::uint8_t>& compressed,
                        std::string& error) noexcept {
-    const int quality = std::clamp(level, 1, 11);
-    std::size_t encodedSize = BrotliEncoderMaxCompressedSize(plain.size());
-    compressed.resize(encodedSize);
-    if (BrotliEncoderCompress(quality,
-                              BROTLI_DEFAULT_WINDOW,
-                              BROTLI_MODE_GENERIC,
-                              plain.size(),
-                              plain.data(),
-                              &encodedSize,
-                              compressed.data()) == BROTLI_FALSE) {
+    compressed.resize(external_primitives::brotliCompressBound(plain.size()));
+    std::size_t written = 0u;
+    const auto status = external_primitives::brotliCompressBlock(level, plain, compressed, written);
+    if (!isOk(status)) {
         error = "brotli failed to compress block";
-        return Status::DecodeError;
+        return status;
     }
-    compressed.resize(encodedSize);
+    compressed.resize(written);
     return Status::Ok;
 }
 
@@ -42,9 +104,8 @@ Status decompressPayload(std::span<const std::uint8_t> input,
                          std::vector<std::uint8_t>& decoded,
                          std::string& error) noexcept {
     decoded.resize(plainBytes);
-    std::size_t decodedSize = decoded.size();
-    const auto status = BrotliDecoderDecompress(input.size(), input.data(), &decodedSize, decoded.data());
-    if (status != BROTLI_DECODER_RESULT_SUCCESS || decodedSize != plainBytes) {
+    const auto status = external_primitives::brotliDecompressBlock(input, decoded);
+    if (!isOk(status)) {
         error = "brotli failed to decompress block";
         return Status::DecodeError;
     }
@@ -54,7 +115,7 @@ Status decompressPayload(std::span<const std::uint8_t> input,
 
 const standard_jsonl_blocks::CodecSpec kSpec{
     format::kCodecBrotliJsonlBlocks,
-    "hfc.brotli_jsonl_blocks",
+    "hfc.brotli_binary_blocks",
     "brotli encoder/decoder libraries were not found at configure time",
 #if HFT_COMPRESSOR_WITH_BROTLI
     compressPayload,

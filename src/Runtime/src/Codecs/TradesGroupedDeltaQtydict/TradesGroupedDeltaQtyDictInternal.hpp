@@ -1,32 +1,30 @@
+#pragma once
+
 #include "TradesGroupedDeltaQtyDict.hpp"
+#include "hft_compressor/ByteBlock.hpp"
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <fstream>
-#include <numeric>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <unordered_map>
 #include <vector>
 
 #include "../../Common/CompressionInternals.hpp"
+#include "../../Common/ExactScaleMath.hpp"
 #include "../../Common/Timing.hpp"
 #include "../../Container/Hfc/Format.hpp"
-
-#pragma once
 
 namespace hft_compressor::internal { class DecodeSource; }
 
 namespace hft_compressor::codecs::trades_grouped_delta_qtydict::codec_detail {
 
-
 constexpr std::uint32_t kFileMagic = 0x46435843u;  // CXCF
 constexpr std::uint32_t kChunkMagic = 0x4b484354u; // TCHK
-constexpr std::size_t kFileHeaderBytes = 94u;
-constexpr std::size_t kChunkHeaderBytes = 160u;
+constexpr std::size_t kFileHeaderBytes = 128u;
+constexpr std::size_t kChunkHeaderBytes = 168u;
 
 constexpr std::uint32_t kDefaultChunkRecords = 16u * 1024u;
 constexpr std::uint32_t kHotQtyCount = 64u;
@@ -56,6 +54,7 @@ struct EncodedChunk {
     std::uint32_t hotQtyCount{0};
     std::uint32_t hotQtyBits{7};
     std::uint32_t hotQtyCapacity{64};
+    std::uint32_t sideMode{0}; // 0 = 1-bit binary side, 1 = 8-bit full side
     std::uint32_t dpZeroCount{0};
     std::uint32_t countOneCount{0};
     std::uint32_t priceGroupCountOneCount{0};
@@ -69,14 +68,15 @@ struct EncodedChunk {
     std::vector<std::uint8_t> priceGroupCountOneStream;
     std::vector<std::uint8_t> qtyCodeStream;
     std::vector<std::uint8_t> qtyEscapeStream;
+    std::vector<std::uint8_t> residualStream;
     std::uint32_t payloadCrc32c{0};
 };
 
 struct FileHeader {
     std::uint32_t magic{kFileMagic};
     std::uint16_t stream{0};
-    std::uint16_t lineEnding{1};
     std::uint16_t reserved{0};
+    ByteBlockLayout layout{};
     std::uint32_t chunkRecords{kDefaultChunkRecords};
     std::uint64_t inputBytes{0};
     std::uint64_t outputBytes{0};
@@ -85,6 +85,7 @@ struct FileHeader {
     std::uint64_t timeGroupCount{0};
     std::uint64_t priceGroupCount{0};
     std::uint64_t qtyEscapeCount{0};
+    std::uint32_t recordsCrc32c{0};
     std::uint32_t headerCrc32c{0};
 };
 
@@ -105,6 +106,7 @@ struct ChunkHeader {
     std::int64_t timeScale{1};
     std::uint32_t hotQtyCount{0};
     std::uint32_t hotQtyBits{7};
+    std::uint32_t sideMode{0};
     std::uint32_t timeStreamBytes{0};
     std::uint32_t priceStreamBytes{0};
     std::uint32_t sideStreamBytes{0};
@@ -114,6 +116,7 @@ struct ChunkHeader {
     std::uint32_t qtyCodeStreamBytes{0};
     std::uint32_t qtyEscapeStreamBytes{0};
     std::uint32_t hotQtyTableBytes{0};
+    std::uint32_t residualStreamBytes{0};
     std::uint32_t dpZeroCount{0};
     std::uint32_t countOneCount{0};
     std::uint32_t priceGroupCountOneCount{0};
@@ -165,27 +168,6 @@ struct BitWriter {
     }
 };
 
-struct BitReader {
-    const std::uint8_t* data{nullptr};
-    std::size_t size{0};
-    std::size_t byteOffset{0};
-    unsigned bitOffset{0};
-
-    bool readBits(unsigned bits, std::uint64_t& out) noexcept {
-        std::uint64_t value = 0;
-        for (unsigned i = 0; i < bits; ++i) {
-            if (byteOffset >= size) return false;
-            value |= static_cast<std::uint64_t>((data[byteOffset] >> bitOffset) & 1u) << i;
-            ++bitOffset;
-            if (bitOffset == 8u) {
-                bitOffset = 0;
-                ++byteOffset;
-            }
-        }
-        out = value;
-        return true;
-    }
-};
 void writeVarint(std::vector<std::uint8_t>& out, std::uint64_t value);
 bool readVarint(const std::uint8_t*& p, const std::uint8_t* end, std::uint64_t& out) noexcept;
 std::uint64_t zigzag(std::int64_t value) noexcept;
@@ -199,26 +181,28 @@ bool parseFileHeader(const std::uint8_t* data, std::size_t size, FileHeader& out
 bool parseChunkHeader(const std::uint8_t* data, std::size_t size, ChunkHeader& out) noexcept;
 std::uint32_t headerCrc32c(const FileHeader& header);
 bool validHeader(const FileHeader& header) noexcept;
-std::uint16_t detectLineEnding(std::span<const std::uint8_t> input) noexcept;
 bool validChunkHeader(const ChunkHeader& header) noexcept;
-bool parseTradeLine(std::string_view line, Trade& out) noexcept;
-bool parseTrades(std::span<const std::uint8_t> input, std::vector<Trade>& out);
-void buildHotQty(const std::vector<Trade>& trades, std::size_t begin, std::size_t end, EncodedChunk& chunk, bool useCompactQuantityTable);
+void buildHotQty(const std::vector<Trade>& trades, std::size_t begin, std::size_t end,
+                 EncodedChunk& chunk, bool useCompactQuantityTable);
 std::uint64_t qtyCode(const EncodedChunk& chunk, std::int64_t qty) noexcept;
-EncodedChunk encodeChunk(const std::vector<Trade>& trades, std::size_t begin, std::size_t end);
-void writeChunk(std::ofstream& out, const EncodedChunk& chunk);
+EncodedChunk encodeChunk(const ByteBlockLayout& layout,
+                         std::span<const std::uint8_t> scratchRecords,
+                         const std::vector<Trade>& trades,
+                         std::size_t begin,
+                         std::size_t end);
+void appendChunkBytes(std::vector<std::uint8_t>& out, const EncodedChunk& chunk);
 ReplayArtifactInfo failArtifact(const std::filesystem::path& path, Status status, std::string error);
 bool readFile(const std::filesystem::path& path, std::vector<std::uint8_t>& out);
 Status walkSource(const internal::DecodeSource& file,
-                  const DecodedBlockCallback* onJsonl,
+                  const DecodedBlockCallback* onSlice,
                   std::ostream* encodedJsonOut,
                   std::ostream* binaryDumpOut,
                   FileHeader* parsedHeader);
 Status walkFile(std::span<const std::uint8_t> file,
-                const DecodedBlockCallback* onJsonl,
+                const DecodedBlockCallback* onSlice,
                 std::ostream* encodedJsonOut,
                 std::ostream* binaryDumpOut,
                 FileHeader* parsedHeader = nullptr) noexcept;
 Status writeStringBlock(const std::string& text, const DecodedBlockCallback& onBlock);
 
-}  // namespace codec_detail
+}  // namespace hft_compressor::codecs::trades_grouped_delta_qtydict::codec_detail

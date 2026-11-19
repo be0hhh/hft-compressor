@@ -20,8 +20,8 @@ class BaseSource final : public internal::DecodeSource {
         std::unique_ptr<internal::DecodeCursor> decoded;
         std::uint64_t position{};
     };
-    // Native codecs have at most ten simultaneous column/table/CRC cursors.
-    // Reuse forward entropy positions across Trades chunks; never retain base
+    // Native codecs have bounded simultaneous column/table/CRC cursors.
+    // Reuse forward entropy positions across chunks; never retain whole base
     // bytes or create one cached state per chunk/file offset.
     mutable std::array<State, 16> idle_{};
     void recycle(State state) const noexcept {
@@ -47,7 +47,8 @@ class BaseSource final : public internal::DecodeSource {
         }
     };
 public:
-    BaseSource(const internal::DecodeSource& encoded, const Header& header) : encoded_(encoded), header_(header) {}
+    BaseSource(const internal::DecodeSource& encoded, const Header& header)
+        : encoded_(encoded), header_(header) {}
     void reset() noexcept { for (auto& state : idle_) state = {}; }
     std::uint64_t size() const noexcept override { return header_.baseBytes; }
     std::unique_ptr<internal::DecodeCursor> cursor(std::uint64_t offset, std::uint64_t count) const override {
@@ -57,7 +58,7 @@ public:
             if (candidate.decoded && candidate.position <= offset
                 && (!best || candidate.position > best->position)) best = &candidate;
         }
-        State state = best ? std::move(*best) : State{arithmeticCursor(encoded_, header_), 0u};
+        State state = best ? std::move(*best) : State{entropyCursor(encoded_, header_), 0u};
         if (!state.decoded || !state.decoded->skip(offset - state.position)) return {};
         state.position = offset;
         return std::make_unique<Cursor>(*this, std::move(state), count);
@@ -81,17 +82,21 @@ Status decodeSource(const internal::DecodeSource& file, const DecodedBlockCallba
     auto status = verifyPayload(file, header);
     if (!isOk(status)) return status;
     BaseSource base(file, header);
-    std::uint64_t produced{}, lines{};
+    std::uint64_t produced{};
     bool invalidOutput = false;
+    std::array<std::uint8_t, kBinarySliceHeaderBytes> sliceHeaderBytes{};
+    std::size_t sliceHeaderFilled = 0u;
     const DecodedBlockCallback validate = [&](std::span<const std::uint8_t> bytes) {
         if (produced > header.inputBytes || bytes.size() > header.inputBytes - produced) {
-            invalidOutput = true; return false;
+            invalidOutput = true;
+            return false;
+        }
+        if (sliceHeaderFilled < sliceHeaderBytes.size()) {
+            const std::size_t take = std::min(sliceHeaderBytes.size() - sliceHeaderFilled, bytes.size());
+            std::copy_n(bytes.data(), take, sliceHeaderBytes.data() + sliceHeaderFilled);
+            sliceHeaderFilled += take;
         }
         produced += bytes.size();
-        for (auto byte : bytes) if (byte == '\n') {
-            if (lines == header.lineCount) { invalidOutput = true; return false; }
-            ++lines;
-        }
         return true;
     };
     // Validate both container and complete native column/chunk layout before
@@ -99,7 +104,15 @@ Status decodeSource(const internal::DecodeSource& file, const DecodedBlockCallba
     status = decodeBase(static_cast<BaseKind>(header.base), base, validate);
     if (invalidOutput || (!isOk(status) && status == Status::CallbackStopped)) return Status::CorruptData;
     if (!isOk(status)) return status;
-    if (produced != header.inputBytes || lines != header.lineCount || !file.unchanged()) return Status::CorruptData;
+    if (produced != header.inputBytes || sliceHeaderFilled != sliceHeaderBytes.size() || !file.unchanged()) {
+        return Status::CorruptData;
+    }
+    std::uint32_t sliceRecordCount = 0u;
+    for (unsigned i = 0u; i < 4u; ++i) {
+        sliceRecordCount |= static_cast<std::uint32_t>(sliceHeaderBytes[36u + i]) << (8u * i);
+    }
+    if (sliceRecordCount != header.lineCount) return Status::CorruptData;
+
     base.reset();
     status = decodeBase(static_cast<BaseKind>(header.base), base, onBlock);
     return !file.unchanged() ? Status::CorruptData : status;

@@ -1,25 +1,18 @@
 #include "EntropyHftMac.hpp"
+#include "EntropyHftMacInternal.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
+#include <limits>
 #include <span>
-#include <sstream>
 #include <string_view>
-#include <system_error>
 #include <vector>
-#include "../BooktickerDeltaMask/BookTickerDeltaMask.hpp"
-#include "../DepthLadderOffset/DepthLadderOffset.hpp"
-#include "../TradesGroupedDeltaQtydict/TradesGroupedDeltaQtyDict.hpp"
-#include "../../Common/CompressionInternals.hpp"
-#include "../../Common/Timing.hpp"
+
 #include "../../Container/Hfc/Format.hpp"
-#include "EntropyHftMacInternal.hpp"
 
 namespace hft_compressor::codecs::entropy_hftmac::detail {
-
 namespace {
 
 template <typename T>
@@ -40,9 +33,6 @@ bool readLe(const std::uint8_t*& p, const std::uint8_t* end, T& out) noexcept {
     return true;
 }
 
-}
-
-namespace {
 std::array<std::uint8_t, kHeaderBytes> fixedHeader(Header header, bool includeCrc) noexcept {
     if (!includeCrc) header.headerCrc32c = 0u;
     std::array<std::uint8_t, kHeaderBytes> bytes{};
@@ -61,7 +51,8 @@ std::array<std::uint8_t, kHeaderBytes> fixedHeader(Header header, bool includeCr
     writeLe(out, header.decodedCrc32c);
     return bytes;
 }
-}
+
+} // namespace
 
 std::vector<std::uint8_t> serializeHeader(Header header, bool includeCrc) {
     const auto bytes = fixedHeader(header, includeCrc);
@@ -109,7 +100,6 @@ EntropyKind entropyKindFor(std::string_view id) noexcept {
     if (id.find("ac16_ctx8") != std::string_view::npos) return EntropyKind::Ac16Ctx8;
     if (id.find("ac16_ctx12") != std::string_view::npos) return EntropyKind::Ac16Ctx12;
     if (id.find("ac32_ctx8") != std::string_view::npos) return EntropyKind::Ac32Ctx8;
-    if (id.find("range_byte_ctx8") != std::string_view::npos) return EntropyKind::RangeByteCtx8;
     return EntropyKind::RansByteStatic;
 }
 
@@ -144,10 +134,9 @@ std::string_view entropyName(EntropyKind kind) noexcept {
         case EntropyKind::Ac16Ctx8: return "ac16_ctx8";
         case EntropyKind::Ac16Ctx12: return "ac16_ctx12";
         case EntropyKind::Ac32Ctx8: return "ac32_ctx8";
-        case EntropyKind::RangeByteCtx8: return "range_byte_ctx8";
         case EntropyKind::RansByteStatic: return "rans_byte_static";
     }
     return "unknown";
 }
 
-}
+}  // namespace hft_compressor::codecs::entropy_hftmac::detail

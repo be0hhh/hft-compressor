@@ -1,13 +1,13 @@
 #include "StandardJsonlBlocks.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <fstream>
-#include <string_view>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
 
+#include "hft_compressor/CorpusLab.hpp"
 #include "../../Common/CompressionInternals.hpp"
 #include "../../Common/Timing.hpp"
 #include "../../Container/Hfc/Format.hpp"
@@ -38,113 +38,6 @@ bool validBlock(const format::BlockHeader& block,
 
 bool validHeaderCrc(const format::FileHeader& fileHeader) noexcept {
     return format::storedHeaderCrc32c(fileHeader) == format::headerCrc32c(fileHeader);
-}
-
-struct JsonCursor {
-    std::string_view text{};
-    std::size_t pos{0};
-
-    void skipSpaces() noexcept {
-        while (pos < text.size()) {
-            const char c = text[pos];
-            if (c != ' ' && c != '\t' && c != '\r') break;
-            ++pos;
-        }
-    }
-
-    bool consume(char c) noexcept {
-        skipSpaces();
-        if (pos >= text.size() || text[pos] != c) return false;
-        ++pos;
-        return true;
-    }
-
-    bool peek(char c) noexcept {
-        skipSpaces();
-        return pos < text.size() && text[pos] == c;
-    }
-
-    bool parseInt64(std::int64_t& out) noexcept {
-        skipSpaces();
-        if (pos >= text.size()) return false;
-        const char* begin = text.data() + pos;
-        const char* end = text.data() + text.size();
-        const auto [ptr, ec] = std::from_chars(begin, end, out);
-        if (ec != std::errc{} || ptr == begin) return false;
-        pos = static_cast<std::size_t>(ptr - text.data());
-        return true;
-    }
-
-    bool finish() noexcept {
-        skipSpaces();
-        return pos == text.size();
-    }
-};
-
-bool validSide(std::int64_t side) noexcept {
-    return side == 0 || side == 1;
-}
-
-bool validTradeLine(std::string_view line) noexcept {
-    JsonCursor p{line};
-    std::int64_t value = 0;
-    std::int64_t side = 0;
-    return p.consume('[')
-        && p.parseInt64(value) && p.consume(',')
-        && p.parseInt64(value) && p.consume(',')
-        && p.parseInt64(side) && validSide(side) && p.consume(',')
-        && p.parseInt64(value)
-        && p.consume(']') && p.finish();
-}
-
-bool validBookTickerLine(std::string_view line) noexcept {
-    JsonCursor p{line};
-    std::int64_t value = 0;
-    return p.consume('[')
-        && p.parseInt64(value) && p.consume(',')
-        && p.parseInt64(value) && p.consume(',')
-        && p.parseInt64(value) && p.consume(',')
-        && p.parseInt64(value) && p.consume(',')
-        && p.parseInt64(value)
-        && p.consume(']') && p.finish();
-}
-
-bool validDepthLevel(JsonCursor& p) noexcept {
-    std::int64_t value = 0;
-    std::int64_t side = 0;
-    return p.consume('[')
-        && p.parseInt64(value) && p.consume(',')
-        && p.parseInt64(value) && p.consume(',')
-        && p.parseInt64(side) && validSide(side)
-        && p.consume(']');
-}
-
-bool validDepthLine(std::string_view line) noexcept {
-    JsonCursor p{line};
-    std::int64_t tsNs = 0;
-    if (!p.consume('[') || !p.peek('[')) return false;
-    while (p.peek('[')) {
-        if (!validDepthLevel(p) || !p.consume(',')) return false;
-    }
-    return p.parseInt64(tsNs) && p.consume(']') && p.finish();
-}
-
-bool validateStrictJsonl(std::span<const std::uint8_t> input, StreamType streamType) noexcept {
-    std::size_t lineStart = 0;
-    while (lineStart < input.size()) {
-        std::size_t lineEnd = lineStart;
-        while (lineEnd < input.size() && input[lineEnd] != static_cast<std::uint8_t>('\n')) ++lineEnd;
-        std::string_view line{reinterpret_cast<const char*>(input.data() + lineStart), lineEnd - lineStart};
-        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
-        if (line.empty()) return false;
-        const bool ok = streamType == StreamType::Trades ? validTradeLine(line)
-            : streamType == StreamType::BookTicker ? validBookTickerLine(line)
-            : streamType == StreamType::Depth ? validDepthLine(line)
-            : false;
-        if (!ok) return false;
-        lineStart = lineEnd + (lineEnd < input.size() ? 1u : 0u);
-    }
-    return true;
 }
 
 ReplayArtifactInfo failArtifact(const std::filesystem::path& path, Status status, std::string error) {
@@ -182,26 +75,27 @@ CompressionResult compress(const CompressionRequest& request,
                            const PipelineDescriptor& pipeline,
                            const CodecSpec& spec) noexcept {
     if (!codecAvailable(spec)) {
-        auto result = internal::fail(Status::DependencyUnavailable, request, &pipeline, std::string{spec.dependencyError});
-        return result;
+        return internal::fail(Status::DependencyUnavailable, request, &pipeline, std::string{spec.dependencyError});
     }
     if (request.inputPath.empty()) {
-        auto result = internal::fail(Status::InvalidArgument, request, &pipeline, "input path is empty");
-        return result;
+        return internal::fail(Status::InvalidArgument, request, &pipeline, "input path is empty");
     }
     const StreamType streamType = inferStreamTypeFromPath(request.inputPath);
     if (streamType == StreamType::Unknown) {
-        auto result = internal::fail(Status::UnsupportedStream, request, &pipeline, "expected trades.jsonl, bookticker.jsonl, or depth.jsonl");
-        return result;
+        return internal::fail(Status::UnsupportedStream, request, &pipeline, "expected canonical binary stream slice (.bin/.hbs)");
     }
     std::vector<std::uint8_t> input;
     if (!internal::readFileBytes(request.inputPath, input)) {
-        auto result = internal::fail(Status::IoError, request, &pipeline, "failed to read input file");
-        return result;
+        return internal::fail(Status::IoError, request, &pipeline, "failed to read input file");
     }
-    if (!validateStrictJsonl(input, streamType)) {
-        auto result = internal::fail(Status::CorruptData, request, &pipeline, "input is not strict canonical jsonl for stream");
-        return result;
+    BinarySliceView slice{};
+    const auto sliceStatus = parseBinarySlice(input, slice);
+    if (!isOk(sliceStatus) || slice.layout.streamType != streamType) {
+        return internal::fail(
+            isOk(sliceStatus) ? Status::UnsupportedStream : sliceStatus,
+            request,
+            &pipeline,
+            "input is not a valid canonical binary slice for stream");
     }
 
     const auto blockBytes = std::max<std::uint32_t>(request.blockBytes, 4096u);
@@ -209,8 +103,7 @@ CompressionResult compress(const CompressionRequest& request,
     std::error_code ec;
     std::filesystem::create_directories(outputPath.parent_path(), ec);
     if (ec) {
-        auto result = internal::fail(Status::IoError, request, &pipeline, "failed to create output directory");
-        return result;
+        return internal::fail(Status::IoError, request, &pipeline, "failed to create output directory");
     }
 
     CompressionResult result{};
@@ -220,11 +113,11 @@ CompressionResult compress(const CompressionRequest& request,
     result.outputPath = outputPath;
     result.metricsPath = outputPath.parent_path() / (outputPath.stem().string() + ".metrics.json");
     result.inputBytes = static_cast<std::uint64_t>(input.size());
+    result.lineCount = slice.recordCount;
 
     std::ofstream out(outputPath, std::ios::binary | std::ios::trunc);
     if (!out) {
-        auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to open output file");
-        return failed;
+        return internal::fail(Status::IoError, request, &pipeline, "failed to open output file");
     }
 
     format::FileHeader fileHeader{};
@@ -233,35 +126,40 @@ CompressionResult compress(const CompressionRequest& request,
     fileHeader.blockBytes = blockBytes;
     fileHeader.inputBytes = result.inputBytes;
     const auto placeholderHeader = format::serializeFileHeader(fileHeader);
-    out.write(reinterpret_cast<const char*>(placeholderHeader.data()), static_cast<std::streamsize>(placeholderHeader.size()));
+    out.write(reinterpret_cast<const char*>(placeholderHeader.data()),
+              static_cast<std::streamsize>(placeholderHeader.size()));
 
     const auto encodeStartNs = timing::nowNs();
     const auto encodeStartCycles = timing::readCycles();
     std::vector<std::uint8_t> compressed;
-    for (std::size_t offset = 0; offset < input.size(); offset += blockBytes) {
+    for (std::size_t offset = 0u; offset < input.size(); offset += blockBytes) {
         const auto remaining = input.size() - offset;
         const auto plainSize = std::min<std::size_t>(remaining, blockBytes);
-        const bool isLast = offset + plainSize >= input.size();
         std::string encodeError;
-        const auto encodeStatus = spec.compressPayload({input.data() + offset, plainSize}, request.zstdLevel, compressed, encodeError);
+        const auto encodeStatus = spec.compressPayload(
+            {input.data() + offset, plainSize}, request.zstdLevel, compressed, encodeError);
         if (!isOk(encodeStatus)) {
-            auto failed = internal::fail(encodeStatus, request, &pipeline, encodeError.empty() ? "failed to compress block" : encodeError);
-            return failed;
+            return internal::fail(
+                encodeStatus,
+                request,
+                &pipeline,
+                encodeError.empty() ? "failed to compress block" : encodeError);
         }
 
         format::BlockHeader block{};
         block.uncompressedBytes = static_cast<std::uint32_t>(plainSize);
         block.compressedBytes = static_cast<std::uint32_t>(compressed.size());
-        block.lineCount = static_cast<std::uint32_t>(internal::countLines({input.data() + offset, plainSize}, isLast));
+        block.lineCount = (offset == 0u) ? slice.recordCount : 0u;
         block.firstByteOffset = static_cast<std::uint64_t>(offset);
         format::setBlockChecksums(block,
                                   format::crc32c(compressed),
                                   format::crc32c({input.data() + offset, plainSize}));
         const auto blockHeader = format::serializeBlockHeader(block);
-        out.write(reinterpret_cast<const char*>(blockHeader.data()), static_cast<std::streamsize>(blockHeader.size()));
-        out.write(reinterpret_cast<const char*>(compressed.data()), static_cast<std::streamsize>(compressed.size()));
+        out.write(reinterpret_cast<const char*>(blockHeader.data()),
+                  static_cast<std::streamsize>(blockHeader.size()));
+        out.write(reinterpret_cast<const char*>(compressed.data()),
+                  static_cast<std::streamsize>(compressed.size()));
         result.outputBytes += format::kBlockHeaderBytes + static_cast<std::uint64_t>(compressed.size());
-        result.lineCount += block.lineCount;
         ++result.blockCount;
     }
     result.outputBytes += format::kFileHeaderBytes;
@@ -274,16 +172,16 @@ CompressionResult compress(const CompressionRequest& request,
     format::setHeaderCrc32c(fileHeader, format::headerCrc32c(fileHeader));
     const auto finalHeader = format::serializeFileHeader(fileHeader);
     out.seekp(0, std::ios::beg);
-    out.write(reinterpret_cast<const char*>(finalHeader.data()), static_cast<std::streamsize>(finalHeader.size()));
+    out.write(reinterpret_cast<const char*>(finalHeader.data()),
+              static_cast<std::streamsize>(finalHeader.size()));
     out.close();
     if (!out) {
-        auto failed = internal::fail(Status::IoError, request, &pipeline, "failed to write compressed file");
-        return failed;
+        return internal::fail(Status::IoError, request, &pipeline, "failed to write compressed file");
     }
 
     std::vector<std::uint8_t> compressedFile;
     if (internal::readFileBytes(outputPath, compressedFile)) {
-        std::size_t decodedOffset = 0;
+        std::size_t decodedOffset = 0u;
         bool decodedMatchesInput = true;
         const auto decodeStartNs = timing::nowNs();
         const auto decodeStartCycles = timing::readCycles();
@@ -292,7 +190,10 @@ CompressionResult compress(const CompressionRequest& request,
                 decodedMatchesInput = false;
                 return false;
             }
-            decodedMatchesInput = std::equal(block.begin(), block.end(), input.begin() + static_cast<std::ptrdiff_t>(decodedOffset));
+            decodedMatchesInput = std::equal(
+                block.begin(),
+                block.end(),
+                input.begin() + static_cast<std::ptrdiff_t>(decodedOffset));
             decodedOffset += block.size();
             return decodedMatchesInput;
         }, spec);
@@ -317,7 +218,9 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path,
 
     std::uint8_t fileHeaderBytes[format::kFileHeaderBytes]{};
     in.read(reinterpret_cast<char*>(fileHeaderBytes), static_cast<std::streamsize>(sizeof(fileHeaderBytes)));
-    if (in.gcount() != static_cast<std::streamsize>(sizeof(fileHeaderBytes))) return failArtifact(path, Status::CorruptData, "truncated artifact header");
+    if (in.gcount() != static_cast<std::streamsize>(sizeof(fileHeaderBytes))) {
+        return failArtifact(path, Status::CorruptData, "truncated artifact header");
+    }
 
     format::FileHeader header{};
     if (!format::parseFileHeader(fileHeaderBytes, sizeof(fileHeaderBytes), header) || !validHeader(header, spec)) {
@@ -326,9 +229,9 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path,
     if (!validHeaderCrc(header)) return failArtifact(path, Status::CorruptData, "artifact header crc mismatch");
 
     std::uint64_t fileOffset = format::kFileHeaderBytes;
-    std::uint64_t expectedPlainOffset = 0;
+    std::uint64_t expectedPlainOffset = 0u;
     std::vector<std::uint8_t> compressed;
-    for (std::uint64_t blockIndex = 0; blockIndex < header.blockCount; ++blockIndex) {
+    for (std::uint64_t blockIndex = 0u; blockIndex < header.blockCount; ++blockIndex) {
         std::uint8_t blockHeaderBytes[format::kBlockHeaderBytes]{};
         in.read(reinterpret_cast<char*>(blockHeaderBytes), static_cast<std::streamsize>(sizeof(blockHeaderBytes)));
         if (in.gcount() != static_cast<std::streamsize>(sizeof(blockHeaderBytes))) {
@@ -351,10 +254,14 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path,
         expectedPlainOffset += block.uncompressedBytes;
     }
 
-    if (expectedPlainOffset != header.inputBytes) return failArtifact(path, Status::CorruptData, "decoded byte count mismatch");
-    if (header.outputBytes != 0u && fileOffset != header.outputBytes) return failArtifact(path, Status::CorruptData, "output byte count mismatch");
+    if (expectedPlainOffset != header.inputBytes) {
+        return failArtifact(path, Status::CorruptData, "artifact decoded byte count mismatch");
+    }
+    if (header.outputBytes != 0u && fileOffset != header.outputBytes) {
+        return failArtifact(path, Status::CorruptData, "artifact output byte count mismatch");
+    }
     char extra = 0;
-    if (in.read(&extra, 1)) return failArtifact(path, Status::CorruptData, "trailing bytes after blocks");
+    if (in.read(&extra, 1)) return failArtifact(path, Status::CorruptData, "trailing bytes after artifact blocks");
 
     ReplayArtifactInfo info{};
     info.status = Status::Ok;
@@ -377,16 +284,21 @@ Status decode(std::span<const std::uint8_t> compressedFile,
               const CodecSpec& spec) noexcept {
     if (!codecAvailable(spec)) return Status::DependencyUnavailable;
     if (compressedFile.size() < format::kFileHeaderBytes || !onBlock) return Status::InvalidArgument;
+
     format::FileHeader fileHeader{};
-    if (!format::parseFileHeader(compressedFile.data(), compressedFile.size(), fileHeader)) return Status::CorruptData;
-    if (!validHeader(fileHeader, spec)) return Status::CorruptData;
-    if (!validHeaderCrc(fileHeader)) return Status::CorruptData;
-    if (fileHeader.outputBytes != 0u && fileHeader.outputBytes != compressedFile.size()) return Status::CorruptData;
+    if (!format::parseFileHeader(compressedFile.data(), compressedFile.size(), fileHeader)
+        || !validHeader(fileHeader, spec)
+        || !validHeaderCrc(fileHeader)) {
+        return Status::CorruptData;
+    }
+    if (fileHeader.outputBytes != 0u && fileHeader.outputBytes != compressedFile.size()) {
+        return Status::CorruptData;
+    }
 
     std::size_t offset = format::kFileHeaderBytes;
     std::vector<std::uint8_t> decoded;
-    std::uint64_t expectedOffset = 0;
-    for (std::uint64_t blockIndex = 0; blockIndex < fileHeader.blockCount; ++blockIndex) {
+    std::uint64_t expectedOffset = 0u;
+    for (std::uint64_t blockIndex = 0u; blockIndex < fileHeader.blockCount; ++blockIndex) {
         if (compressedFile.size() - offset < format::kBlockHeaderBytes) return Status::CorruptData;
         format::BlockHeader block{};
         if (!format::parseBlockHeader(compressedFile.data() + offset, compressedFile.size() - offset, block)
@@ -396,20 +308,21 @@ Status decode(std::span<const std::uint8_t> compressedFile,
         offset += format::kBlockHeaderBytes;
         if (compressedFile.size() - offset < block.compressedBytes) return Status::CorruptData;
         bool shouldContinue = true;
-        const auto status = decodeBlockPayload(fileHeader,
-                                               block,
-                                               {compressedFile.data() + offset, block.compressedBytes},
-                                               decoded,
-                                               onBlock,
-                                               shouldContinue,
-                                               spec);
+        const auto status = decodeBlockPayload(
+            fileHeader,
+            block,
+            {compressedFile.data() + offset, block.compressedBytes},
+            decoded,
+            onBlock,
+            shouldContinue,
+            spec);
         if (!isOk(status)) return status;
         offset += block.compressedBytes;
         expectedOffset += block.uncompressedBytes;
-        if (!shouldContinue) return Status::Ok;
+        if (!shouldContinue) return Status::CallbackStopped;
     }
-    if (offset != compressedFile.size()) return Status::CorruptData;
-    if (expectedOffset != fileHeader.inputBytes) return Status::CorruptData;
+
+    if (offset != compressedFile.size() || expectedOffset != fileHeader.inputBytes) return Status::CorruptData;
     return Status::Ok;
 }
 
@@ -426,15 +339,17 @@ Status decodeFile(const std::filesystem::path& path,
     if (in.gcount() != static_cast<std::streamsize>(sizeof(fileHeaderBytes))) return Status::CorruptData;
 
     format::FileHeader fileHeader{};
-    if (!format::parseFileHeader(fileHeaderBytes, sizeof(fileHeaderBytes), fileHeader)) return Status::CorruptData;
-    if (!validHeader(fileHeader, spec)) return Status::CorruptData;
-    if (!validHeaderCrc(fileHeader)) return Status::CorruptData;
+    if (!format::parseFileHeader(fileHeaderBytes, sizeof(fileHeaderBytes), fileHeader)
+        || !validHeader(fileHeader, spec)
+        || !validHeaderCrc(fileHeader)) {
+        return Status::CorruptData;
+    }
 
+    std::uint64_t bytesRead = format::kFileHeaderBytes;
+    std::uint64_t expectedOffset = 0u;
     std::vector<std::uint8_t> compressed;
     std::vector<std::uint8_t> decoded;
-    std::uint64_t expectedOffset = 0;
-    std::uint64_t totalRead = format::kFileHeaderBytes;
-    for (std::uint64_t blockIndex = 0; blockIndex < fileHeader.blockCount; ++blockIndex) {
+    for (std::uint64_t blockIndex = 0u; blockIndex < fileHeader.blockCount; ++blockIndex) {
         std::uint8_t blockHeaderBytes[format::kBlockHeaderBytes]{};
         in.read(reinterpret_cast<char*>(blockHeaderBytes), static_cast<std::streamsize>(sizeof(blockHeaderBytes)));
         if (in.gcount() != static_cast<std::streamsize>(sizeof(blockHeaderBytes))) return Status::CorruptData;
@@ -444,26 +359,23 @@ Status decodeFile(const std::filesystem::path& path,
             || !validBlock(block, fileHeader, expectedOffset)) {
             return Status::CorruptData;
         }
-        totalRead += format::kBlockHeaderBytes;
-
         compressed.resize(block.compressedBytes);
         in.read(reinterpret_cast<char*>(compressed.data()), static_cast<std::streamsize>(compressed.size()));
         if (in.gcount() != static_cast<std::streamsize>(compressed.size())) return Status::CorruptData;
-        totalRead += block.compressedBytes;
 
         bool shouldContinue = true;
         const auto status = decodeBlockPayload(fileHeader, block, compressed, decoded, onBlock, shouldContinue, spec);
         if (!isOk(status)) return status;
+        bytesRead += format::kBlockHeaderBytes + block.compressedBytes;
         expectedOffset += block.uncompressedBytes;
-        if (!shouldContinue) return Status::Ok;
+        if (!shouldContinue) return Status::CallbackStopped;
     }
 
-    if (fileHeader.outputBytes != 0u && totalRead != fileHeader.outputBytes) return Status::CorruptData;
     if (expectedOffset != fileHeader.inputBytes) return Status::CorruptData;
+    if (fileHeader.outputBytes != 0u && bytesRead != fileHeader.outputBytes) return Status::CorruptData;
     char extra = 0;
     if (in.read(&extra, 1)) return Status::CorruptData;
     return Status::Ok;
 }
 
 }  // namespace hft_compressor::codecs::standard_jsonl_blocks
-

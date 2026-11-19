@@ -3,7 +3,6 @@
 
 namespace hft_compressor::codecs::trades_grouped_delta_qtydict::codec_detail {
 
-
 ReplayArtifactInfo failArtifact(const std::filesystem::path& path, Status status, std::string error) {
     ReplayArtifactInfo info{};
     info.status = status;
@@ -14,15 +13,16 @@ ReplayArtifactInfo failArtifact(const std::filesystem::path& path, Status status
 
 Status writeStringBlock(const std::string& text, const DecodedBlockCallback& onBlock) {
     if (!onBlock) return Status::InvalidArgument;
-    return onBlock(std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(text.data()), text.size()})
+    return onBlock(std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t*>(text.data()), text.size()})
         ? Status::Ok
         : Status::CallbackStopped;
 }
-}  // namespace codec_detail
+
+}  // namespace hft_compressor::codecs::trades_grouped_delta_qtydict::codec_detail
 
 namespace hft_compressor::codecs::trades_grouped_delta_qtydict {
 using namespace codec_detail;
-
 
 ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const PipelineDescriptor& pipeline) noexcept try {
     if (path.empty()) return failArtifact(path, Status::InvalidArgument, "artifact path is empty");
@@ -46,55 +46,69 @@ ReplayArtifactInfo inspectArtifact(const std::filesystem::path& path, const Pipe
     info.lineCount = header.recordCount;
     info.blockCount = header.chunkCount;
     return info;
-} catch (...) { ReplayArtifactInfo failed{}; failed.status = Status::DecodeError; return failed; }
+} catch (...) {
+    ReplayArtifactInfo failed{};
+    failed.status = Status::DecodeError;
+    return failed;
+}
 
 Status inspectEncodedJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept try {
+    if (!onBlock) return Status::InvalidArgument;
     std::vector<std::uint8_t> file;
     if (!readFile(path, file)) return Status::IoError;
     std::ostringstream out;
     const auto status = walkFile(file, nullptr, &out, nullptr);
     if (!isOk(status)) return status;
     return writeStringBlock(out.str(), onBlock);
-} catch (...) { return Status::DecodeError; }
+} catch (...) {
+    return Status::DecodeError;
+}
 
 Status inspectEncodedBinaryFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept try {
+    if (!onBlock) return Status::InvalidArgument;
     std::vector<std::uint8_t> file;
     if (!readFile(path, file)) return Status::IoError;
     std::ostringstream out;
     const auto status = walkFile(file, nullptr, nullptr, &out);
     if (!isOk(status)) return status;
     return writeStringBlock(out.str(), onBlock);
-} catch (...) { return Status::DecodeError; }
+} catch (...) {
+    return Status::DecodeError;
+}
 
 Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBlockCallback& onBlock) noexcept try {
+    if (!onBlock) return Status::InvalidArgument;
     std::vector<std::uint8_t> file;
     if (!readFile(path, file)) return Status::IoError;
     FileHeader header{};
     const auto status = walkFile(file, nullptr, nullptr, nullptr, &header);
     if (!isOk(status)) return status;
 
-    std::uint64_t hotQtyTableBytes = 0;
-    std::uint64_t timeStreamBytes = 0;
-    std::uint64_t priceStreamBytes = 0;
-    std::uint64_t sideStreamBytes = 0;
-    std::uint64_t dpZeroStreamBytes = 0;
-    std::uint64_t countOneStreamBytes = 0;
-    std::uint64_t priceGroupCountOneStreamBytes = 0;
-    std::uint64_t qtyCodeStreamBytes = 0;
-    std::uint64_t qtyEscapeStreamBytes = 0;
-    std::uint64_t dpZeroCount = 0;
-    std::uint64_t countOneCount = 0;
-    std::uint64_t priceGroupCountOneCount = 0;
+    std::uint64_t hotQtyTableBytes = 0u;
+    std::uint64_t timeStreamBytes = 0u;
+    std::uint64_t priceStreamBytes = 0u;
+    std::uint64_t sideStreamBytes = 0u;
+    std::uint64_t dpZeroStreamBytes = 0u;
+    std::uint64_t countOneStreamBytes = 0u;
+    std::uint64_t priceGroupCountOneStreamBytes = 0u;
+    std::uint64_t qtyCodeStreamBytes = 0u;
+    std::uint64_t qtyEscapeStreamBytes = 0u;
+    std::uint64_t residualStreamBytes = 0u;
+    std::uint64_t dpZeroCount = 0u;
+    std::uint64_t countOneCount = 0u;
+    std::uint64_t priceGroupCountOneCount = 0u;
     std::int64_t firstPriceScale = 1;
     std::int64_t firstQtyScale = 1;
     std::int64_t firstTimeScale = 1;
-    std::uint32_t firstHotQtyBits = 7;
+    std::uint32_t firstHotQtyBits = 7u;
 
     std::size_t offset = kFileHeaderBytes;
-    for (std::uint64_t chunkIndex = 0; chunkIndex < header.chunkCount; ++chunkIndex) {
+    for (std::uint64_t chunkIndex = 0u; chunkIndex < header.chunkCount; ++chunkIndex) {
         if (file.size() - offset < kChunkHeaderBytes) return Status::CorruptData;
         ChunkHeader chunk{};
-        if (!parseChunkHeader(file.data() + offset, file.size() - offset, chunk) || !validChunkHeader(chunk)) return Status::CorruptData;
+        if (!parseChunkHeader(file.data() + offset, file.size() - offset, chunk) || !validChunkHeader(chunk)) {
+            return Status::CorruptData;
+        }
         offset += kChunkHeaderBytes;
         if (chunkIndex == 0u) {
             firstPriceScale = chunk.priceScale;
@@ -105,7 +119,8 @@ Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBloc
         const auto tableBytes = static_cast<std::size_t>(chunk.hotQtyTableBytes);
         const auto streamsSize = static_cast<std::size_t>(chunk.timeStreamBytes)
             + chunk.priceStreamBytes + chunk.sideStreamBytes + chunk.dpZeroStreamBytes + chunk.countOneStreamBytes
-            + chunk.priceGroupCountOneStreamBytes + chunk.qtyCodeStreamBytes + chunk.qtyEscapeStreamBytes;
+            + chunk.priceGroupCountOneStreamBytes + chunk.qtyCodeStreamBytes + chunk.qtyEscapeStreamBytes
+            + chunk.residualStreamBytes;
         if (file.size() - offset < tableBytes + streamsSize) return Status::CorruptData;
         offset += tableBytes + streamsSize;
         hotQtyTableBytes += tableBytes;
@@ -117,6 +132,7 @@ Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBloc
         priceGroupCountOneStreamBytes += chunk.priceGroupCountOneStreamBytes;
         qtyCodeStreamBytes += chunk.qtyCodeStreamBytes;
         qtyEscapeStreamBytes += chunk.qtyEscapeStreamBytes;
+        residualStreamBytes += chunk.residualStreamBytes;
         dpZeroCount += chunk.dpZeroCount;
         countOneCount += chunk.countOneCount;
         priceGroupCountOneCount += chunk.priceGroupCountOneCount;
@@ -127,10 +143,10 @@ Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBloc
     out << "{\n"
         << "  \"pipeline_id\": \"hftmac.trades_grouped_delta_qtydict_math\",\n"
         << "  \"record_count\": " << header.recordCount << ",\n"
+        << "  \"record_bytes\": " << header.layout.recordBytes << ",\n"
         << "  \"chunk_count\": " << header.chunkCount << ",\n"
         << "  \"input_bytes\": " << header.inputBytes << ",\n"
         << "  \"encoded_bytes\": " << header.outputBytes << ",\n"
-        << "  \"bytes_per_trade\": " << (header.recordCount == 0u ? 0.0 : static_cast<double>(header.outputBytes) / static_cast<double>(header.recordCount)) << ",\n"
         << "  \"timestamp_group_count\": " << header.timeGroupCount << ",\n"
         << "  \"price_group_count\": " << header.priceGroupCount << ",\n"
         << "  \"qty_escape_count\": " << header.qtyEscapeCount << ",\n"
@@ -149,8 +165,12 @@ Status inspectStatsJsonFile(const std::filesystem::path& path, const DecodedBloc
         << "  \"count_one_stream_bytes\": " << countOneStreamBytes << ",\n"
         << "  \"price_group_count_one_stream_bytes\": " << priceGroupCountOneStreamBytes << ",\n"
         << "  \"qty_code_stream_bytes\": " << qtyCodeStreamBytes << ",\n"
-        << "  \"qty_escape_stream_bytes\": " << qtyEscapeStreamBytes << "\n"
+        << "  \"qty_escape_stream_bytes\": " << qtyEscapeStreamBytes << ",\n"
+        << "  \"residual_stream_bytes\": " << residualStreamBytes << "\n"
         << "}\n";
     return writeStringBlock(out.str(), onBlock);
-} catch (...) { return Status::DecodeError; }
+} catch (...) {
+    return Status::DecodeError;
+}
+
 }  // namespace hft_compressor::codecs::trades_grouped_delta_qtydict

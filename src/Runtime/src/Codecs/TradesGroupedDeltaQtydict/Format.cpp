@@ -2,7 +2,6 @@
 
 namespace hft_compressor::codecs::trades_grouped_delta_qtydict::codec_detail {
 
-
 void writeVarint(std::vector<std::uint8_t>& out, std::uint64_t value) {
     while (value >= 0x80u) {
         out.push_back(static_cast<std::uint8_t>(value | 0x80u));
@@ -34,11 +33,8 @@ std::int64_t unzigzag(std::uint64_t value) noexcept {
     return static_cast<std::int64_t>((value >> 1u) ^ (~(value & 1u) + 1u));
 }
 
-
 std::int64_t gcdPositive(std::int64_t a, std::int64_t b) noexcept {
-    auto ua = static_cast<std::uint64_t>(a < 0 ? -a : a);
-    auto ub = static_cast<std::uint64_t>(b < 0 ? -b : b);
-    return static_cast<std::int64_t>(std::gcd(ua, ub));
+    return math::binaryGcdAbs(a, b);
 }
 
 unsigned bitsForHotCapacity(std::uint32_t capacity) noexcept {
@@ -52,7 +48,7 @@ unsigned bitsForHotCapacity(std::uint32_t capacity) noexcept {
 }
 
 std::int64_t safeScale(std::int64_t value) noexcept {
-    return value <= 0 ? 1 : value;
+    return math::safePositiveScale(value);
 }
 
 std::vector<std::uint8_t> serializeFileHeader(FileHeader header, bool includeCrc) {
@@ -61,8 +57,15 @@ std::vector<std::uint8_t> serializeFileHeader(FileHeader header, bool includeCrc
     out.reserve(kFileHeaderBytes);
     writeLe(out, header.magic);
     writeLe(out, header.stream);
-    writeLe(out, header.lineEnding);
     writeLe(out, header.reserved);
+    writeLe(out, static_cast<std::uint32_t>(header.layout.streamType));
+    writeLe(out, header.layout.recordBytes);
+    writeLe(out, header.layout.payloadOffset);
+    writeLe(out, header.layout.timestampOffset);
+    writeLe(out, header.layout.depthLevelsOffset);
+    writeLe(out, header.layout.depthLevelStride);
+    writeLe(out, header.layout.depthLevelCountOffset);
+    writeLe(out, header.layout.depthLevelCapacity);
     writeLe(out, header.chunkRecords);
     writeLe(out, header.inputBytes);
     writeLe(out, header.outputBytes);
@@ -71,6 +74,7 @@ std::vector<std::uint8_t> serializeFileHeader(FileHeader header, bool includeCrc
     writeLe(out, header.timeGroupCount);
     writeLe(out, header.priceGroupCount);
     writeLe(out, header.qtyEscapeCount);
+    writeLe(out, header.recordsCrc32c);
     writeLe(out, header.headerCrc32c);
     out.resize(kFileHeaderBytes, 0u);
     return out;
@@ -95,6 +99,7 @@ std::vector<std::uint8_t> serializeChunkHeader(const ChunkHeader& header) {
     writeLe(out, header.timeScale);
     writeLe(out, header.hotQtyCount);
     writeLe(out, header.hotQtyBits);
+    writeLe(out, header.sideMode);
     writeLe(out, header.timeStreamBytes);
     writeLe(out, header.priceStreamBytes);
     writeLe(out, header.sideStreamBytes);
@@ -104,6 +109,7 @@ std::vector<std::uint8_t> serializeChunkHeader(const ChunkHeader& header) {
     writeLe(out, header.qtyCodeStreamBytes);
     writeLe(out, header.qtyEscapeStreamBytes);
     writeLe(out, header.hotQtyTableBytes);
+    writeLe(out, header.residualStreamBytes);
     writeLe(out, header.dpZeroCount);
     writeLe(out, header.countOneCount);
     writeLe(out, header.priceGroupCountOneCount);
@@ -116,10 +122,18 @@ bool parseFileHeader(const std::uint8_t* data, std::size_t size, FileHeader& out
     if (data == nullptr || size < kFileHeaderBytes) return false;
     const auto* p = data;
     const auto* end = data + kFileHeaderBytes;
-    return readLe(p, end, out.magic)
+    std::uint32_t streamRaw = 0u;
+    const bool ok = readLe(p, end, out.magic)
         && readLe(p, end, out.stream)
-        && readLe(p, end, out.lineEnding)
         && readLe(p, end, out.reserved)
+        && readLe(p, end, streamRaw)
+        && readLe(p, end, out.layout.recordBytes)
+        && readLe(p, end, out.layout.payloadOffset)
+        && readLe(p, end, out.layout.timestampOffset)
+        && readLe(p, end, out.layout.depthLevelsOffset)
+        && readLe(p, end, out.layout.depthLevelStride)
+        && readLe(p, end, out.layout.depthLevelCountOffset)
+        && readLe(p, end, out.layout.depthLevelCapacity)
         && readLe(p, end, out.chunkRecords)
         && readLe(p, end, out.inputBytes)
         && readLe(p, end, out.outputBytes)
@@ -128,7 +142,11 @@ bool parseFileHeader(const std::uint8_t* data, std::size_t size, FileHeader& out
         && readLe(p, end, out.timeGroupCount)
         && readLe(p, end, out.priceGroupCount)
         && readLe(p, end, out.qtyEscapeCount)
+        && readLe(p, end, out.recordsCrc32c)
         && readLe(p, end, out.headerCrc32c);
+    if (!ok || !std::all_of(p, end, [](auto b) { return b == 0u; })) return false;
+    out.layout.streamType = static_cast<StreamType>(streamRaw);
+    return true;
 }
 
 bool parseChunkHeader(const std::uint8_t* data, std::size_t size, ChunkHeader& out) noexcept {
@@ -151,6 +169,7 @@ bool parseChunkHeader(const std::uint8_t* data, std::size_t size, ChunkHeader& o
         && readLe(p, end, out.timeScale)
         && readLe(p, end, out.hotQtyCount)
         && readLe(p, end, out.hotQtyBits)
+        && readLe(p, end, out.sideMode)
         && readLe(p, end, out.timeStreamBytes)
         && readLe(p, end, out.priceStreamBytes)
         && readLe(p, end, out.sideStreamBytes)
@@ -160,12 +179,13 @@ bool parseChunkHeader(const std::uint8_t* data, std::size_t size, ChunkHeader& o
         && readLe(p, end, out.qtyCodeStreamBytes)
         && readLe(p, end, out.qtyEscapeStreamBytes)
         && readLe(p, end, out.hotQtyTableBytes)
+        && readLe(p, end, out.residualStreamBytes)
         && readLe(p, end, out.dpZeroCount)
         && readLe(p, end, out.countOneCount)
         && readLe(p, end, out.priceGroupCountOneCount)
-        && readLe(p, end, out.payloadCrc32c);
+        && readLe(p, end, out.payloadCrc32c)
+        && std::all_of(p, end, [](auto b) { return b == 0u; });
 }
-
 
 std::uint32_t headerCrc32c(const FileHeader& header) {
     return format::crc32c(serializeFileHeader(header, false));
@@ -174,17 +194,10 @@ std::uint32_t headerCrc32c(const FileHeader& header) {
 bool validHeader(const FileHeader& header) noexcept {
     return header.magic == kFileMagic
         && format::streamFromWire(header.stream) == StreamType::Trades
-        && (header.lineEnding == 1u || header.lineEnding == 2u)
+        && header.layout.streamType == StreamType::Trades
+        && validByteBlockLayout(header.layout)
         && header.reserved == 0u
         && header.chunkRecords != 0u;
-}
-
-std::uint16_t detectLineEnding(std::span<const std::uint8_t> input) noexcept {
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        if (input[i] != static_cast<std::uint8_t>('\n')) continue;
-        return i > 0u && input[i - 1u] == static_cast<std::uint8_t>('\r') ? 2u : 1u;
-    }
-    return 1u;
 }
 
 bool validChunkHeader(const ChunkHeader& header) noexcept {
@@ -193,6 +206,8 @@ bool validChunkHeader(const ChunkHeader& header) noexcept {
         && header.timeGroupCount != 0u
         && header.priceGroupCount != 0u
         && header.hotQtyCount <= kMaxHotQtyCount
-        && header.hotQtyBits <= 8u;
+        && header.hotQtyBits <= 8u
+        && header.sideMode <= 1u;
 }
-}  // namespace codec_detail
+
+}  // namespace hft_compressor::codecs::trades_grouped_delta_qtydict::codec_detail
