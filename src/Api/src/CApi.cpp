@@ -33,6 +33,7 @@ hft_compressor::StreamType toStreamType(uint32_t value) noexcept {
         case HFTC_STREAM_TRADES: return hft_compressor::StreamType::Trades;
         case HFTC_STREAM_BOOKTICKER: return hft_compressor::StreamType::BookTicker;
         case HFTC_STREAM_DEPTH: return hft_compressor::StreamType::Depth;
+        case HFTC_STREAM_DEPTH_COVERAGE: return hft_compressor::StreamType::DepthCoverage;
         default: return hft_compressor::StreamType::Unknown;
     }
 }
@@ -51,6 +52,7 @@ uint32_t toCStreamType(hft_compressor::StreamType value) noexcept {
         case hft_compressor::StreamType::Trades: return HFTC_STREAM_TRADES;
         case hft_compressor::StreamType::BookTicker: return HFTC_STREAM_BOOKTICKER;
         case hft_compressor::StreamType::Depth: return HFTC_STREAM_DEPTH;
+        case hft_compressor::StreamType::DepthCoverage: return HFTC_STREAM_DEPTH_COVERAGE;
         case hft_compressor::StreamType::Unknown: return HFTC_STREAM_UNKNOWN;
     }
     return HFTC_STREAM_UNKNOWN;
@@ -126,8 +128,8 @@ extern "C" hftc_status hftc_decoder_decode_all(hftc_decoder* decoder,
             out.depth_count = depths.size();
             out.depth_levels = depthLevels.data();
             out.depth_level_count = depthLevels.size();
-                return callback(&out, user_data) != 0;
-            });
+            return callback(&out, user_data) != 0;
+        });
         return toCStatus(status);
     } catch (...) {
         return HFTC_STATUS_IO_ERROR;

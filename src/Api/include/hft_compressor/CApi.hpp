@@ -28,6 +28,7 @@ typedef enum hftc_stream_type {
     HFTC_STREAM_TRADES = 1,
     HFTC_STREAM_BOOKTICKER = 2,
     HFTC_STREAM_DEPTH = 3,
+    HFTC_STREAM_DEPTH_COVERAGE = 4,
 } hftc_stream_type;
 
 typedef enum hftc_artifact_preference {

@@ -33,7 +33,7 @@ enum class VerifyMode : std::uint8_t {
 struct DecodeVerifyRequest {
     std::filesystem::path compressedPath{};
     std::filesystem::path canonicalPath{};
-    std::string pipelineId{"std.zstd_jsonl_blocks"};
+    std::string pipelineId{"std.zstd_blocks"};
     bool verifyBytes{true};
     VerifyMode verifyMode{VerifyMode::Both};
 };

@@ -1,120 +1,14 @@
 #include "hft_compressor/ReplayDecode.hpp"
+#include "hft_compressor/CorpusLab.hpp"
 
 #include <algorithm>
-#include <charconv>
-#include <string>
-#include <string_view>
-#include <system_error>
+#include <bit>
+#include <vector>
+
+#include "../../Runtime/src/Codecs/ByteBlock/BinaryTransform.hpp"
 
 namespace hft_compressor {
 namespace {
-
-struct JsonCursor {
-    std::string_view text{};
-    std::size_t pos{0};
-
-    void skipSpaces() noexcept {
-        while (pos < text.size()) {
-            const char c = text[pos];
-            if (c != ' ' && c != '\t' && c != '\r') break;
-            ++pos;
-        }
-    }
-
-    bool consume(char c) noexcept {
-        skipSpaces();
-        if (pos >= text.size() || text[pos] != c) return false;
-        ++pos;
-        return true;
-    }
-
-    bool peek(char c) noexcept {
-        skipSpaces();
-        return pos < text.size() && text[pos] == c;
-    }
-
-    bool parseInt64(std::int64_t& out) noexcept {
-        skipSpaces();
-        if (pos >= text.size()) return false;
-        const char* begin = text.data() + pos;
-        const char* end = text.data() + text.size();
-        const auto [ptr, ec] = std::from_chars(begin, end, out);
-        if (ec != std::errc{} || ptr == begin) return false;
-        pos = static_cast<std::size_t>(ptr - text.data());
-        return true;
-    }
-
-    bool finish() noexcept {
-        skipSpaces();
-        return pos == text.size();
-    }
-};
-
-bool validSide(std::int64_t side) noexcept {
-    return side == 0 || side == 1;
-}
-
-bool parseTradeLine(std::string_view line, ReplayBatchTradeRecord& out) noexcept {
-    JsonCursor p{line};
-    return p.consume('[')
-        && p.parseInt64(out.priceE8) && p.consume(',')
-        && p.parseInt64(out.qtyE8) && p.consume(',')
-        && p.parseInt64(out.side) && validSide(out.side) && p.consume(',')
-        && p.parseInt64(out.tsNs)
-        && p.consume(']') && p.finish();
-}
-
-bool parseBookTickerLine(std::string_view line, ReplayBatchBookTickerRecord& out) noexcept {
-    JsonCursor p{line};
-    return p.consume('[')
-        && p.parseInt64(out.bidPriceE8) && p.consume(',')
-        && p.parseInt64(out.bidQtyE8) && p.consume(',')
-        && p.parseInt64(out.askPriceE8) && p.consume(',')
-        && p.parseInt64(out.askQtyE8) && p.consume(',')
-        && p.parseInt64(out.tsNs)
-        && p.consume(']') && p.finish();
-}
-
-bool parseDepthLevel(JsonCursor& p, ReplayDepthLevel& out) noexcept {
-    return p.consume('[')
-        && p.parseInt64(out.priceE8) && p.consume(',')
-        && p.parseInt64(out.qtyE8) && p.consume(',')
-        && p.parseInt64(out.side) && validSide(out.side)
-        && p.consume(']');
-}
-
-bool parseDepthLine(std::string_view line, ReplayRecordBatch& batch) {
-    JsonCursor p{line};
-    if (!p.consume('[') || !p.peek('[')) return false;
-    ReplayBatchDepthRecord row{};
-    row.firstLevelIndex = static_cast<std::uint32_t>(batch.depthLevels.size());
-    while (p.peek('[')) {
-        ReplayDepthLevel level{};
-        if (!parseDepthLevel(p, level) || !p.consume(',')) return false;
-        batch.depthLevels.push_back(level);
-        ++row.levelCount;
-    }
-    if (!p.parseInt64(row.tsNs) || !p.consume(']') || !p.finish()) return false;
-    batch.depths.push_back(row);
-    return true;
-}
-
-bool parseLine(StreamType streamType, std::string_view line, ReplayRecordBatch& batch) {
-    if (streamType == StreamType::Trades) {
-        ReplayBatchTradeRecord row{};
-        if (!parseTradeLine(line, row)) return false;
-        batch.trades.push_back(row);
-        return true;
-    }
-    if (streamType == StreamType::BookTicker) {
-        ReplayBatchBookTickerRecord row{};
-        if (!parseBookTickerLine(line, row)) return false;
-        batch.bookTickers.push_back(row);
-        return true;
-    }
-    if (streamType == StreamType::Depth) return parseDepthLine(line, batch);
-    return false;
-}
 
 Status flushBatch(ReplayRecordBatch& batch, const ReplayRecordBatchCallback& onBatch) {
     if (batch.recordCount() == 0u) return Status::Ok;
@@ -123,43 +17,53 @@ Status flushBatch(ReplayRecordBatch& batch, const ReplayRecordBatchCallback& onB
     return Status::Ok;
 }
 
-Status processJsonlBlock(StreamType streamType,
-                         std::span<const std::uint8_t> block,
-                         std::string& carry,
-                         std::uint64_t& lineNumber,
-                         ReplayRecordBatch& batch,
-                         std::size_t maxRecordsPerBatch,
-                         const ReplayRecordBatchCallback& onBatch) {
-    carry.append(reinterpret_cast<const char*>(block.data()), block.size());
-    std::size_t start = 0;
-    for (;;) {
-        const std::size_t newline = carry.find('\n', start);
-        if (newline == std::string::npos) break;
-        std::string_view line{carry.data() + start, newline - start};
-        ++lineNumber;
-        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
-        if (!line.empty()) {
-            if (batch.recordCount() == 0u) batch.firstLineNumber = lineNumber;
-            if (!parseLine(streamType, line, batch)) return Status::CorruptData;
-            ++batch.lineCount;
-            batch.decodedBytes += static_cast<std::uint64_t>(newline - start + 1u);
-            if (batch.recordCount() >= maxRecordsPerBatch) {
-                const auto status = flushBatch(batch, onBatch);
-                if (!isOk(status)) return status;
-            }
-        }
-        start = newline + 1u;
+bool appendBinaryRecordToBatch(const ByteBlockLayout& layout,
+                               std::span<const std::uint8_t> rec,
+                               ReplayRecordBatch& batch) {
+    const std::int64_t tsNs = (layout.timestampOffset + 8u <= layout.recordBytes)
+        ? std::bit_cast<std::int64_t>(codecs::byte_block::word(rec, layout.timestampOffset, 8u))
+        : 0;
+    if (layout.streamType == StreamType::Trades) {
+        const auto price = std::bit_cast<std::int64_t>(codecs::byte_block::word(rec, layout.payloadOffset, 8u));
+        const auto qty = std::bit_cast<std::int64_t>(codecs::byte_block::word(rec, layout.payloadOffset + 8u, 8u));
+        const auto side = static_cast<std::int64_t>(rec[layout.payloadOffset + 16u]);
+        batch.trades.push_back(ReplayBatchTradeRecord{tsNs, price, qty, side});
+        return true;
     }
-    if (start != 0u) carry.erase(0, start);
-    return Status::Ok;
+    if (layout.streamType == StreamType::BookTicker) {
+        const auto bid = std::bit_cast<std::int64_t>(codecs::byte_block::word(rec, layout.payloadOffset, 8u));
+        const auto bidQty = std::bit_cast<std::int64_t>(codecs::byte_block::word(rec, layout.payloadOffset + 8u, 8u));
+        const auto ask = std::bit_cast<std::int64_t>(codecs::byte_block::word(rec, layout.payloadOffset + 16u, 8u));
+        const auto askQty = std::bit_cast<std::int64_t>(codecs::byte_block::word(rec, layout.payloadOffset + 24u, 8u));
+        batch.bookTickers.push_back(ReplayBatchBookTickerRecord{tsNs, bid, bidQty, ask, askQty});
+        return true;
+    }
+    if (layout.streamType == StreamType::Depth) {
+        const auto levelCount = codecs::byte_block::word(rec, layout.depthLevelCountOffset, 2u);
+        if (levelCount > layout.depthLevelCapacity) return false;
+        ReplayBatchDepthRecord row{};
+        row.tsNs = tsNs;
+        row.firstLevelIndex = static_cast<std::uint32_t>(batch.depthLevels.size());
+        row.levelCount = static_cast<std::uint32_t>(levelCount);
+        for (std::size_t i = 0u; i < levelCount; ++i) {
+            const std::size_t off = layout.depthLevelsOffset + i * layout.depthLevelStride;
+            const auto price = std::bit_cast<std::int64_t>(codecs::byte_block::word(rec, off, 8u));
+            const auto qty = std::bit_cast<std::int64_t>(codecs::byte_block::word(rec, off + 8u, 8u));
+            const auto side = static_cast<std::int64_t>(rec[off + 16u]);
+            batch.depthLevels.push_back(ReplayDepthLevel{price, qty, side});
+        }
+        batch.depths.push_back(row);
+        return true;
+    }
+    return false;
 }
 
 }  // namespace
 
 void ReplayRecordBatch::clearRows() noexcept {
-    firstLineNumber = 0;
-    lineCount = 0;
-    decodedBytes = 0;
+    firstLineNumber = 0u;
+    lineCount = 0u;
+    decodedBytes = 0u;
     trades.clear();
     bookTickers.clear();
     depths.clear();
@@ -174,51 +78,55 @@ Status decodeReplayArtifactRecordBatches(const ReplayArtifactInfo& artifact,
                                          std::size_t maxRecordsPerBatch,
                                          const ReplayRecordBatchCallback& onBatch) noexcept {
     try {
-    if (!artifact.found || artifact.streamType == StreamType::Unknown || !onBatch) return Status::InvalidArgument;
-    maxRecordsPerBatch = std::max<std::size_t>(maxRecordsPerBatch, 1u);
-    ReplayRecordBatch batch{};
-    batch.streamType = artifact.streamType;
-    std::string carry;
-    std::uint64_t lineNumber = 0;
-    Status streamStatus = Status::Ok;
-    const auto decodeStatus = decodeReplayArtifactJsonl(artifact, [&](std::span<const std::uint8_t> block) -> bool {
-        streamStatus = processJsonlBlock(artifact.streamType,
-                                         block,
-                                         carry,
-                                         lineNumber,
-                                         batch,
-                                         maxRecordsPerBatch,
-                                         onBatch);
-        return isOk(streamStatus);
-    });
-    // A file-integrity failure must not be hidden by the record consumer's
-    // deliberate stop during the publication pass.
-    if (!isOk(decodeStatus) && decodeStatus != Status::CallbackStopped) return decodeStatus;
-    if (!isOk(streamStatus)) return streamStatus;
-    if (!isOk(decodeStatus)) return decodeStatus;
-    if (!carry.empty()) {
-        ++lineNumber;
-        if (!carry.empty() && carry.back() == '\r') carry.pop_back();
-        if (!carry.empty()) {
-            if (batch.recordCount() == 0u) batch.firstLineNumber = lineNumber;
-            if (!parseLine(artifact.streamType, carry, batch)) return Status::CorruptData;
-            ++batch.lineCount;
-            batch.decodedBytes += static_cast<std::uint64_t>(carry.size());
+        if (!artifact.found || artifact.streamType == StreamType::Unknown || !onBatch) {
+            return Status::InvalidArgument;
         }
+        maxRecordsPerBatch = std::max<std::size_t>(maxRecordsPerBatch, 1u);
+
+        std::vector<std::uint8_t> sliceBytes;
+        const auto decodeStatus = decodeReplayArtifactJsonl(artifact, [&](std::span<const std::uint8_t> block) -> bool {
+            sliceBytes.insert(sliceBytes.end(), block.begin(), block.end());
+            return true;
+        });
+        if (!isOk(decodeStatus)) return decodeStatus;
+
+        BinarySliceView slice{};
+        const auto parseSt = parseBinarySlice(sliceBytes, slice);
+        if (!isOk(parseSt)) return parseSt;
+        if (slice.layout.streamType != artifact.streamType) return Status::CorruptData;
+
+        ReplayRecordBatch batch{};
+        batch.streamType = artifact.streamType;
+        const std::size_t stride = slice.layout.recordBytes;
+
+        for (std::uint32_t i = 0u; i < slice.recordCount; ++i) {
+            if (batch.recordCount() == 0u) batch.firstLineNumber = i + 1u;
+            const auto rec = slice.records.subspan(static_cast<std::size_t>(i) * stride, stride);
+            if (!appendBinaryRecordToBatch(slice.layout, rec, batch)) return Status::CorruptData;
+            ++batch.lineCount;
+            batch.decodedBytes += stride;
+            if (batch.recordCount() >= maxRecordsPerBatch) {
+                const auto st = flushBatch(batch, onBatch);
+                if (!isOk(st)) return st;
+            }
+        }
+        return flushBatch(batch, onBatch);
+    } catch (...) {
+        return Status::DecodeError;
     }
-    return flushBatch(batch, onBatch);
-    } catch (...) { return Status::DecodeError; }
 }
 
 Status decodeReplayRecordBatches(const ReplayDecodeRequest& request,
                                  const ReplayRecordBatchCallback& onBatch) noexcept {
     try {
-    if (!onBatch) return Status::InvalidArgument;
-    const auto artifact = discoverReplayArtifact(request.artifact);
-    if (!isOk(artifact.status)) return artifact.status;
-    if (!artifact.found) return Status::IoError;
-    return decodeReplayArtifactRecordBatches(artifact, request.maxRecordsPerBatch, onBatch);
-    } catch (...) { return Status::DecodeError; }
+        if (!onBatch) return Status::InvalidArgument;
+        const auto artifact = discoverReplayArtifact(request.artifact);
+        if (!isOk(artifact.status)) return artifact.status;
+        if (!artifact.found) return Status::IoError;
+        return decodeReplayArtifactRecordBatches(artifact, request.maxRecordsPerBatch, onBatch);
+    } catch (...) {
+        return Status::DecodeError;
+    }
 }
 
 }  // namespace hft_compressor

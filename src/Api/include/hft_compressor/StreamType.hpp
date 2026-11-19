@@ -12,6 +12,7 @@ enum class StreamType {
     Trades,
     BookTicker,
     Depth,
+    DepthCoverage,
 };
 
 HFT_COMPRESSOR_API StreamType inferStreamTypeFromPath(const std::filesystem::path& path) noexcept;
@@ -19,4 +20,3 @@ HFT_COMPRESSOR_API std::string_view streamTypeToString(StreamType type) noexcept
 HFT_COMPRESSOR_API std::string_view streamTypeChannelName(StreamType type) noexcept;
 
 }  // namespace hft_compressor
-

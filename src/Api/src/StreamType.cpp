@@ -11,7 +11,9 @@ StreamType inferStreamTypeFromPath(const std::filesystem::path& path) noexcept {
     auto separator = native.find_last_of('/');
     if constexpr (std::filesystem::path::preferred_separator != '/') {
         const auto preferred = native.find_last_of(std::filesystem::path::preferred_separator);
-        if (preferred != native.npos && (separator == native.npos || preferred > separator)) separator = preferred;
+        if (preferred != native.npos && (separator == native.npos || preferred > separator)) {
+            separator = preferred;
+        }
     }
     const auto begin = separator == native.npos ? 0u : separator + 1u;
     const auto matches = [&](std::string_view expected) noexcept {
@@ -23,9 +25,10 @@ StreamType inferStreamTypeFromPath(const std::filesystem::path& path) noexcept {
         }
         return true;
     };
-    if (matches("trades.jsonl")) return StreamType::Trades;
-    if (matches("bookticker.jsonl")) return StreamType::BookTicker;
-    if (matches("depth.jsonl")) return StreamType::Depth;
+    if (matches("trades.bin") || matches("trades.hbs")) return StreamType::Trades;
+    if (matches("bookticker.bin") || matches("bookticker.hbs")) return StreamType::BookTicker;
+    if (matches("depth.bin") || matches("depth.hbs")) return StreamType::Depth;
+    if (matches("depth_coverage.bin") || matches("depth_coverage.hbs")) return StreamType::DepthCoverage;
     return StreamType::Unknown;
 }
 
@@ -34,6 +37,7 @@ std::string_view streamTypeToString(StreamType type) noexcept {
         case StreamType::Trades: return "trades";
         case StreamType::BookTicker: return "bookticker";
         case StreamType::Depth: return "depth";
+        case StreamType::DepthCoverage: return "depth_coverage";
         case StreamType::Unknown: return "unknown";
     }
     return "unknown";

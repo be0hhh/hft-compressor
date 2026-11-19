@@ -1,13 +1,18 @@
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include "../Runtime/src/Codecs/BooktickerDeltaMask/BookTickerDeltaMask.hpp"
 #include "../Runtime/src/Codecs/DepthLadderOffset/DepthLadderOffset.hpp"
 #include "../Runtime/src/Codecs/EntropyHftmac/EntropyHftMac.hpp"
 #include "../Runtime/src/Codecs/TradesGroupedDeltaQtydict/TradesGroupedDeltaQtyDict.hpp"
 #include "hft_compressor/Compressor.hpp"
+#include "hft_compressor/CorpusLab.hpp"
 
 namespace {
 
@@ -34,6 +39,65 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
+    if (argc >= 4 && std::string_view{argv[1]} == "lab") {
+        std::filesystem::path input;
+        std::string_view corpusId{"cli"};
+        std::uint32_t blockRecords = static_cast<std::uint32_t>(hft_compressor::kByteBlockMaxRecords);
+        for (int i = 2; i + 1 < argc; i += 2) {
+            if (argEquals(argv[i], "--input")) input = std::filesystem::path{argv[i + 1]};
+            else if (argEquals(argv[i], "--corpus-id")) corpusId = std::string_view{argv[i + 1]};
+            else if (argEquals(argv[i], "--block-records")) {
+                const unsigned long v = std::strtoul(argv[i + 1], nullptr, 10);
+                if (v > 0ul && v <= hft_compressor::kByteBlockMaxRecords) {
+                    blockRecords = static_cast<std::uint32_t>(v);
+                }
+            }
+        }
+        std::ifstream in(input, std::ios::binary);
+        if (!in) {
+            std::fprintf(stderr, "status=io_error\n");
+            return 1;
+        }
+        const std::vector<std::uint8_t> bytes{
+            std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+        hft_compressor::BinarySliceView slice{};
+        const auto parseSt = hft_compressor::parseBinarySlice(bytes, slice);
+        if (!hft_compressor::isOk(parseSt)) {
+            std::fprintf(stderr, "status=%s\n", hft_compressor::statusToString(parseSt).data());
+            return 1;
+        }
+        hft_compressor::CorpusLabRequest req{};
+        req.layout = slice.layout;
+        req.records = slice.records;
+        req.setCorpusId(corpusId);
+        req.blockRecords = blockRecords;
+        hft_compressor::CorpusLabReport report{};
+        const auto st = hft_compressor::runCorpusLab(req, report);
+        if (!hft_compressor::isOk(st)) {
+            std::fprintf(stderr, "status=%s\n", hft_compressor::statusToString(st).data());
+            return 1;
+        }
+        std::printf("stream=%s records=%llu raw_bytes=%llu block_bytes=%u baselines_complete=%d\n",
+                    hft_compressor::streamTypeToString(report.streamFamily).data(),
+                    static_cast<unsigned long long>(report.recordCount),
+                    static_cast<unsigned long long>(report.rawBytes),
+                    report.blockBytes,
+                    report.mandatoryBaselinesComplete ? 1 : 0);
+        for (const auto& entry : report.activeEntries()) {
+            const auto name = hft_compressor::corpusLabCodecIdName(entry.codecId);
+            std::printf("rank=%u codec=%.*s status=%s verified=%d compressed=%llu ratio_ppm=%llu enc_Bps=%llu dec_Bps=%llu beats_baselines=%d\n",
+                        entry.ratioRank,
+                        static_cast<int>(name.size()), name.data(),
+                        hft_compressor::statusToString(entry.status).data(),
+                        entry.losslessVerified ? 1 : 0,
+                        static_cast<unsigned long long>(entry.compressedBytes),
+                        static_cast<unsigned long long>(entry.compressionRatioPpm),
+                        static_cast<unsigned long long>(entry.encodeBytesPerSec),
+                        static_cast<unsigned long long>(entry.decodeBytesPerSec),
+                        entry.beatsAllBaselinesInRatio ? 1 : 0);
+        }
+        return std::fflush(stdout) == 0 ? 0 : 1;
+    }
     if (argc >= 6 && std::string_view{argv[1]} == "inspect") {
         std::filesystem::path input;
         std::string_view view;
@@ -45,36 +109,36 @@ int main(int argc, char** argv) {
         auto callback = [](std::span<const std::uint8_t> block) noexcept -> bool {
             return printBlock(block);
         };
+        const bool canonicalView =
+            (view == "canonical-binary" || view == "canonical-json" || view == "canonical-jsonl");
         const auto tryEntropy = [&]() noexcept {
-            if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::entropy_hftmac::decodeFile(input, callback);
+            if (canonicalView) return hft_compressor::codecs::entropy_hftmac::decodeFile(input, callback);
             if (view == "encoded-json") return hft_compressor::codecs::entropy_hftmac::inspectEncodedJsonFile(input, callback);
             if (view == "encoded-binary") return hft_compressor::codecs::entropy_hftmac::inspectEncodedBinaryFile(input, callback);
             if (view == "stats") return hft_compressor::codecs::entropy_hftmac::inspectStatsJsonFile(input, callback);
             return hft_compressor::Status::InvalidArgument;
         };
         const auto tryTrade = [&]() noexcept {
-            if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::trades_grouped_delta_qtydict::decodeFile(input, callback);
+            if (canonicalView) return hft_compressor::codecs::trades_grouped_delta_qtydict::decodeFile(input, callback);
             if (view == "encoded-json") return hft_compressor::codecs::trades_grouped_delta_qtydict::inspectEncodedJsonFile(input, callback);
             if (view == "encoded-binary") return hft_compressor::codecs::trades_grouped_delta_qtydict::inspectEncodedBinaryFile(input, callback);
             if (view == "stats") return hft_compressor::codecs::trades_grouped_delta_qtydict::inspectStatsJsonFile(input, callback);
             return hft_compressor::Status::InvalidArgument;
         };
         const auto tryBookTicker = [&]() noexcept {
-            if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::bookticker_delta_mask::decodeFile(input, callback);
+            if (canonicalView) return hft_compressor::codecs::bookticker_delta_mask::decodeFile(input, callback);
             if (view == "encoded-json") return hft_compressor::codecs::bookticker_delta_mask::inspectEncodedJsonFile(input, callback);
             if (view == "encoded-binary") return hft_compressor::codecs::bookticker_delta_mask::inspectEncodedBinaryFile(input, callback);
             if (view == "stats") return hft_compressor::codecs::bookticker_delta_mask::inspectStatsJsonFile(input, callback);
             return hft_compressor::Status::InvalidArgument;
         };
         const auto tryCurrentDepth = [&]() noexcept {
-            if (view == "canonical-json" || view == "canonical-jsonl") return hft_compressor::codecs::depth_ladder_offset::decodeFile(input, callback);
+            if (canonicalView) return hft_compressor::codecs::depth_ladder_offset::decodeFile(input, callback);
             if (view == "encoded-json") return hft_compressor::codecs::depth_ladder_offset::inspectEncodedJsonFile(input, callback);
             if (view == "encoded-binary") return hft_compressor::codecs::depth_ladder_offset::inspectEncodedBinaryFile(input, callback);
             if (view == "stats") return hft_compressor::codecs::depth_ladder_offset::inspectStatsJsonFile(input, callback);
             return hft_compressor::Status::InvalidArgument;
         };
-        // Probe metadata without output, then invoke one exact format decoder.
-        // A later error must not append another codec's output to a failed prefix.
         const auto matches = [&](std::string_view pipelineId, auto inspect) {
             const auto* pipeline = hft_compressor::findPipeline(pipelineId);
             return pipeline && hft_compressor::isOk(inspect(input, *pipeline).status);
@@ -98,8 +162,9 @@ int main(int argc, char** argv) {
     }
     if (argc < 4 || std::string_view{argv[2]} != "--pipeline") {
         std::puts("Usage: hft-compressor --list-pipelines");
-        std::puts("Usage: hft-compressor <trades.jsonl|bookticker.jsonl|depth.jsonl> --pipeline <pipeline_id> [output_root]");
-        std::puts("Usage: hft-compressor inspect --input <artifact> --view <canonical-json|encoded-json|encoded-binary|stats>");
+        std::puts("Usage: hft-compressor <trades.bin|bookticker.bin|depth.bin> --pipeline <pipeline_id> [output_root]");
+        std::puts("Usage: hft-compressor lab --input <slice.bin> [--corpus-id <id>] [--block-records <1..256>]");
+        std::puts("Usage: hft-compressor inspect --input <artifact> --view <canonical-binary|encoded-json|encoded-binary|stats>");
         return 0;
     }
     hft_compressor::CompressionRequest request{};
